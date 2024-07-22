@@ -33,49 +33,35 @@ def modified_zscore2(yy, _median=np.median):
     zz = 0.67449 * dyy / dd
     return zz
 
-def robust_mean(y, tau=3.0, zscore=modified_zscore):
+def robust_mean(y, tau=3.5, zscore=modified_zscore):
     z = zscore(y)
     return y[abs(z) <= tau].mean()
 
-def robust_mean2(yy, tau=3.0, mean=np.median, std=np.median):
-    mu = mean(yy, axis=0)
-    sigma = std(abs(yy - mu)) / 0.67449
-    mask = (yy <= (mu + tau*sigma)) & (yy >= (mu - tau*sigma))
+def robust_mean2(yy, tau=3.5, _mean=np.median, _std=np.median, _fromiter=np.fromiter, _C=1/0.67449):
+    mu = _mean(yy, axis=0)
+    sigma = _C * _std(abs(yy - mu), axis=0)
+    th = tau * sigma
+    mask = (yy <= (mu + th)) & (yy >= (mu - th))
 
     N = yy.shape[1]
-    Y = np.fromiter(
-            ( yy[mask[:,i],i].mean() \
-              for i in range(N) ),
+    Y = _fromiter(
+            (yy[mask[:,i],i].mean() for i in range(N)), 
             'd', N)
     return Y
 
-# def robust_mean2(yy, tau=3.0, zscore=modified_zscore2, _empty=np.empty):
-#     zz = zscore(yy)
-#     mask = (abs(zz) <= tau)
-
-#     N = yy.shape[1]
-#     Y = np.fromiter(
-#             ( yy[mask[:,i],i].mean() \
-#               for i in range(N) ),
-#             'd', N)
-#     # Y = _empty(N, 'd')
-#     # for i in range(N):
-#     #     Y[i] = yy[mask[:,i],i].mean()
-#     return Y
-
-def filter_outliers(ys, tau=3.0, zscore=modified_zscore):
+def filter_outliers(ys, tau=3.5, zscore=modified_zscore):
     zz = zscore(ys)
     return ys[abs(zz) <= tau]
 
-def outliers_indexes(y, tau=3.0, zscore=modified_zscore, _nonzero=np.nonzero):
+def outliers_indexes(y, tau=3.5, zscore=modified_zscore, _nonzero=np.nonzero):
     z = zscore(y)
     return _nonzero(abs(z) > tau)
 
-def outliers_indexes2(yy, tau=3.0, zscore=modified_zscore2, _nonzero=np.nonzero):
+def outliers_indexes2(yy, tau=3.5, zscore=modified_zscore2, _nonzero=np.nonzero):
     zz = zscore(yy)
     return _nonzero(abs(zz) > tau)
 
-def mark_outliers2(yy, tau=3.0, mean=np.median, std=np.median, marker=np.nan, _nonzero=np.nonzero):
+def mark_outliers2(yy, tau=3.5, mean=np.median, std=np.median, marker=np.nan, _nonzero=np.nonzero):
     mu = mean(yy, axis=0)
     sigma = std(abs(yy - mu)) / 0.67449
     mask = (yy > (mu + tau*sigma)) | (yy < (mu - tau*sigma))
@@ -85,7 +71,7 @@ def mark_outliers2(yy, tau=3.0, mean=np.median, std=np.median, marker=np.nan, _n
     for i,j in zip(*indexes):
         yy[i,j] = marker
 
-def replace_outliers2(yy, tau=3.0, mean=np.median, std=np.median, _nonzero=np.nonzero):
+def replace_outliers2(yy, tau=3.5, mean=np.median, std=np.median, _nonzero=np.nonzero):
     mu = mean(yy, axis=0)
     sigma = std(abs(yy - mu), axis=0) / 0.67449
     mask = (yy > (mu + tau*sigma)) | (yy < (mu - tau*sigma))

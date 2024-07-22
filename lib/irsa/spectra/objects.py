@@ -4,7 +4,8 @@
 
 import numpy as np
 import rampy 
-from irsa.preprocess import smooth, utils
+from irsa.preprocess import utils
+import mlgrad.smooth as smooth
 
 class ExperimentSpectrasSeries:
     #
@@ -31,19 +32,55 @@ class ExperimentSpectrasSeries:
             for y in ys:
                 y[:] -= y.min()
     #
-    def robust_averaging(self, **kwargs):
+    def smooth(self, tau=1.0):
+        Ys = self.y
+        for k in range(len(Ys)):
+            print(k, end=' ')
+            ys = Ys[k]
+            for y in ys:
+                y_max = y.max()
+                y1 = y / y_max
+                y[:] = y_max * smooth.whittaker(y1, tau2=tau, tau1=0, h=0.005, tol=1.0e8)
+        print()
+    #
+    def remove_outlier_spectras(self, delta=0.10, tau=3.5):
+        from irsa.preprocess.utils import robust_mean2
+
+        median = np.median
+
+        Xs, Ys = self.x, self.y
+        ids = []
+        for k in range(len(Ys)):
+            ys = Ys[k]
+            xs = Xs[k]
+            ym = robust_mean2(ys, tau=tau)
+            dym = median(abs(ys - ym), axis=0)
+            dd = dym / (ym+0.001)
+            ds = median(dd)
+            if ds < delta:
+                ids.append(k)
+            # else:
+            #     print(ds)
+        Ys = [Ys[k] for k in ids]
+        Xs = [Xs[k] for k in ids]
+        self.x, self.y = Xs, Ys
+    #    
+    def robust_averaging(self, tau=3.5):
         from irsa.preprocess.utils import robust_mean2
     
         if len(self.y[0].shape) == 1:
             raise TypeError("Усреднять можно только в сериях")
-        tau = kwargs.get("tau", 3.5)
+
         Ys = self.y.copy()
         for k in range(len(Ys)):
             ys = robust_mean2(Ys[k], tau=tau)
             ys -= ys.min()
             Ys[k] = ys
 
-        return ExperimentSpectras(self.x, Ys, self.attrs)
+        Ys = np.ascontiguousarray(Ys)
+        Xs = np.ascontiguousarray(self.x)
+
+        return ExperimentSpectras(Xs, Ys, self.attrs)
     #
 
 class ExperimentSpectras:
@@ -80,10 +117,8 @@ class ExperimentSpectras:
             ys *= 1000
             Ys[k] = ys
     #
-    def remove_outlier_spectras(self, **kwargs):
-        tau = kwargs.get("tau", 3.5)
+    def remove_outlier_spectras(self, tau=3.5):
         Xs, Ys = self.x, self.y
-        Ys = np.array(Ys)
         
         utils.mark_outliers2(Ys, tau=tau)
 
@@ -96,11 +131,11 @@ class ExperimentSpectras:
         if Is:
             Is = np.array(Is)
             Ys = Ys[Is]
-        
-        self.y = Ys
+            Xs = Ys[Is]
+
+        self.x, self.y = Xs, Ys
     #
-    def replace_outlier_spectras(self, **kwargs):
-        tau = kwargs.get("tau", 3.5)
+    def replace_outlier_spectras(self, tau=3.5):
         Xs, Ys = self.x, self.y
         Ys = np.array(Ys)
         
@@ -108,11 +143,9 @@ class ExperimentSpectras:
         
         self.y = Ys
     #
-    def smooth(self, **kwargs):
+    def smooth(self, method="irsa", tau=1.0, **kwargs):
         Xs = self.x
         Ys = self.y
-        tau = kwargs.get('tau', 1.0)
-        method = kwargs.get('method', 'runpy')
         if method == "runpy":
             for k in range(len(Ys)):
                 ys = Ys[k]
@@ -122,7 +155,7 @@ class ExperimentSpectras:
             for k in range(len(Ys)):
                 ys = Ys[k]
                 xs = Xs[k]
-                ys[:] = smooth.whittaker(ys, tau2=tau, tau1=0, h=0.001)
+                ys[:] = smooth.whittaker(ys, tau2=tau, tau1=0, h=0.01)
     #
     def subtract_baseline(self, kind="aspls", pad=0, **kwargs):
         import pybaselines
