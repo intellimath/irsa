@@ -80,4 +80,3 @@ def replace_outliers2(yy, tau=3.5, mean=np.median, std=np.median, _nonzero=np.no
     
     for i,j in zip(*indexes):
         yy[i,j] = mu[j]
-
