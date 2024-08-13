@@ -24,7 +24,16 @@ class ExperimentSpectrasSeries:
             else:
                 Xs[k] = Xs[k][start_index:end_index]
                 Ys[k] = Ys[k][:,start_index:end_index]
-        
+    #
+    def use_range(self, start_index=0, end_index=None):
+        Ys = self.y
+        for k in range(len(Ys)):
+            if end_index is None:
+                Ys[k] = Ys[k][start_index:,:]
+            else:
+                Ys[k] = Ys[k][start_index:end_index,:]
+        self.y = Ys
+    #
     def allign_bottom(self):
         Ys = self.y
         for k in range(len(Ys)):
@@ -37,7 +46,7 @@ class ExperimentSpectrasSeries:
         for k in range(len(Ys)):
             ys = Ys[k]
             for y in ys:
-                y[:] = smooth.whittaker(y, tau2=tau, tau1=0, h=0.001, tol=1.0e6)
+                y[:] = smooth.whittaker(y, tau2=tau, tau1=0, h=0.001, tol=1.0e4)
     #
     def remove_overflow_spectras(self, y_max=2000.0, y_max_count=10):
         Xs, Ys = self.x, self.y
@@ -54,11 +63,11 @@ class ExperimentSpectrasSeries:
                 ids.append(i)
             
             if ids:
-                if len(ids) > 5:
-                    ids = np.array(ids)
-                    ys = ys[ids]
-                    Ys[k] = ys
-                    Is.append(k)
+                # if len(ids) > 5:
+                ids = np.array(ids)
+                ys = ys[ids]
+                Ys[k] = ys
+                Is.append(k)
 
         if Is:
             Ys = [Ys[k] for k in Is]
@@ -80,11 +89,11 @@ class ExperimentSpectrasSeries:
                     ids.append(i)
 
             if ids:
-                if len(ids) > 5:
-                    ids = np.array(ids)
-                    ys = ys[ids]
-                    Ys[k] = ys
-                    Is.append(k)
+                # if len(ids) > 5:
+                ids = np.array(ids)
+                ys = ys[ids]
+                Ys[k] = ys
+                Is.append(k)
 
         if Is:
             Ys = [Ys[k] for k in Is]
@@ -92,7 +101,7 @@ class ExperimentSpectrasSeries:
             self.x, self.y = Xs, Ys
                 
     #
-    def remove_outlier_spectras(self, delta=0.10, tau=3.5, max_count=30):
+    def remove_outlier_spectras(self, delta=0.10, tau=3.0, max_count=30):
         from irsa.preprocess.utils import robust_mean2
 
         median = np.median
@@ -107,8 +116,6 @@ class ExperimentSpectrasSeries:
             dd = dy / (ym+0.001)
             if median(dd) <= delta:
                 ids.append(k)
-            # else:
-            #     print(ds)
         Ys = [Ys[k] for k in ids]
         Xs = [Xs[k] for k in ids]
         self.x, self.y = Xs, Ys
@@ -185,20 +192,21 @@ class ExperimentSpectras:
         Xs, Ys = self.x, self.y
         Is = []
 
-        Zs = utils.modified_zscore(Ys)
+        Zs = utils.modified_zscore2(Ys)
         ids = []
         for i,zs in enumerate(Zs):
-            if (abs(zs) > tau).sum() < max_count:
+            count = (abs(zs) > tau).astype('i').sum()
+            if count < max_count:
                 ids.append(i)
+            # else:
+            #     print(count)
 
         if ids:
-            if len(ids) > 5:
-                ids = np.array(ids)
-                Ys = Ys[ids]
-                Xs = Xs[ids]
+            ids = np.array(ids)
+            Ys = Ys[ids]
+            Xs = Xs[ids]
 
-        self.x, self.y = Xs, Ys
-                
+            self.x, self.y = Xs, Ys
     #
     def remove_outlier_spectras(self, tau=3.5):
         Xs, Ys = self.x, self.y
@@ -232,7 +240,7 @@ class ExperimentSpectras:
         
         self.y = Ys
     #
-    def smooth(self, method="irsa", tau=1.0, **kwargs):
+    def smooth(self, method="irsa", tau=0.01, **kwargs):
         Xs = self.x
         Ys = self.y
         if method == "runpy":
@@ -245,7 +253,10 @@ class ExperimentSpectras:
                 ys = Ys[k]
                 xs = Xs[k]
                 func = kwargs.get("func", None)
-                ys[:] = smooth.whittaker(ys, func=func, tau2=tau, tau1=0, h=0.01)
+                func2 = kwargs.get("func2", None)
+                ys[:] = smooth.whittaker(ys, func=func, tau2=tau, tau1=0)
+                np.putmask(ys, ys < 0, 0)
+
     #
     def subtract_baseline(self, kind="aspls", pad=0, **kwargs):
         import pybaselines
@@ -262,13 +273,19 @@ class ExperimentSpectras:
                 xs1 = xs
                 ys1 = ys
 
+            max_ys = max(ys1) / 2
+            ys1 /= max_ys                
+
             if kind == "aspls":
                 bs1, _ = pybaselines.whittaker.aspls(ys1, x_data=xs1, **kwargs)
             elif kind == "arpls":
                 bs1, _ = pybaselines.whittaker.arpls(ys1, x_data=xs1, **kwargs)
             elif kind == "mor":
                 bs1, _ = pybaselines.morphological.mor(ys1, x_data=xs1, **kwargs)
+
             ys1[:] -= bs1
+            
+            ys1[:] *= max_ys
 
             if pad:
                 ys[:] = ys1[pad:-pad]
