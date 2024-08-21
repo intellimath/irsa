@@ -13,6 +13,39 @@ class ExperimentSpectrasSeries:
         self.x = x
         self.y = y
         self.attrs = attrs
+        attr_names = (
+            "вид_бактерий", "штамм_бактерий", "резистентность", 
+            "отсечки_по_молекулярной_массе", "начальная_концентрация_клеток_в_пробе", 
+            "номер_эксперимента_в_цикле", "номер_повтора", "дата", "комментарий"
+        )
+        key = "_".join(
+            attrs[k] for k in attr_names)
+        self.key = key
+    #
+    def plot_spectras(self, ax=None):
+        import matplotlib.pyplot as plt
+        import ipywidgets
+        
+        i_slider = ipywidgets.IntSlider(min=0, max=len(self.y)-1)
+        i_slider.layout.width="50%"
+        
+        f_slider = ipywidgets.FloatSlider(value=3.5, min=1.0, max=10.0)
+        f_slider.layout.width="50%"        
+
+        @ipywidgets.interact(i=i_slider, f=f_slider, zscore=False)
+        def _plot_spectras(i, f, zscore):
+            # i_slider.value=i
+            plt.figure(figsize=(12,4))
+            plt.title(self.key)
+            i = i_slider.value
+            xs = self.x[i]
+            Ys = self.y[i]
+            for ys in Ys:
+                plt.plot(xs, ys, linewidth=0.75)
+                
+            plt.minorticks_on()
+            plt.tight_layout()
+            plt.show()
     #
     def crop(self, start_index, end_index=None):
         Xs = self.x
@@ -46,7 +79,7 @@ class ExperimentSpectrasSeries:
         for k in range(len(Ys)):
             ys = Ys[k]
             for y in ys:
-                y[:] = smooth.whittaker(y, tau2=tau, tau1=0, h=0.001, tol=1.0e4)
+                y[:] = smooth.whittaker_smooth(y, tau=tau)[0]
     #
     def remove_overflow_spectras(self, y_max=2000.0, y_max_count=10):
         Xs, Ys = self.x, self.y
@@ -156,6 +189,12 @@ class ExperimentSpectras:
                 Xs[k] = Xs[k][start_index:end_index]
                 Ys[k] = Ys[k][start_index:end_index]
     #
+    def replace_small_values(self, delta):
+        Ys = self.y
+        for k in range(len(Ys)):
+            ys = Ys[k]
+            np.putmask(ys, abs(ys)<delta, 0)
+    #
     def allign_bottom(self):
         Ys = self.y
         for k in range(len(Ys)):
@@ -240,7 +279,7 @@ class ExperimentSpectras:
         
         self.y = Ys
     #
-    def smooth(self, method="irsa", tau=0.01, **kwargs):
+    def smooth(self, method="runpy", tau=1.0, **kwargs):
         Xs = self.x
         Ys = self.y
         if method == "runpy":
@@ -252,44 +291,67 @@ class ExperimentSpectras:
             for k in range(len(Ys)):
                 ys = Ys[k]
                 xs = Xs[k]
-                func = kwargs.get("func", None)
-                func2 = kwargs.get("func2", None)
-                ys[:] = smooth.whittaker(ys, func=func, tau2=tau, tau1=0)
+                # func = kwargs.get("func", None)
+                # func2 = kwargs.get("func2", None)
+                ys[:] = smooth.whittaker_smooth(ys, tau=tau)
                 np.putmask(ys, ys < 0, 0)
 
     #
-    def subtract_baseline(self, kind="aspls", pad=0, **kwargs):
+    def get_baselines(self, kind="aspls", **kwargs):
         import pybaselines
         
         Xs = self.x
         Ys = self.y
+        Bs = []
         for k in range(len(Ys)):
             ys = Ys[k]
             xs = Xs[k]
-            if pad:
-                ys1 = np.pad(ys, pad, mode="edge")
-                xs1 = np.pad(xs, pad, mode="linear_ramp")
-            else:
-                xs1 = xs
-                ys1 = ys
-
-            max_ys = max(ys1) / 2
-            ys1 /= max_ys                
 
             if kind == "aspls":
-                bs1, _ = pybaselines.whittaker.aspls(ys1, x_data=xs1, **kwargs)
+                lam = kwargs.get("lam", 1.0e5)
+                diff_order = kwargs.get("diff_order", 2)
+                bs, _ = pybaselines.whittaker.aspls(ys, x_data=xs, 
+                                                     lam=lam, diff_order=diff_order,
+                                                     **kwargs)
             elif kind == "arpls":
-                bs1, _ = pybaselines.whittaker.arpls(ys1, x_data=xs1, **kwargs)
+                lam = kwargs.get("lam", 1.0e5)
+                diff_order = kwargs.get("diff_order", 2)
+                bs, _ = pybaselines.whittaker.arpls(ys, x_data=xs,
+                                                     lam=lam, diff_order=diff_order, 
+                                                     **kwargs)
             elif kind == "mor":
-                bs1, _ = pybaselines.morphological.mor(ys1, x_data=xs1, **kwargs)
+                bs, _ = pybaselines.morphological.mor(ys, x_data=xs, **kwargs)
 
-            ys1[:] -= bs1
-            
-            ys1[:] *= max_ys
+        Bs.append(bs)
 
-            if pad:
-                ys[:] = ys1[pad:-pad]
-                xs[:] = xs1[pad:-pad]
-    
+        return Bs
+        
+    def subtract_baseline(self, kind="aspls", **kwargs):
+        import pybaselines
+        
+        Xs = self.x
+        Ys = self.y
+        Bs = []
+        for k in range(len(Ys)):
+            ys = Ys[k]
+            xs = Xs[k]
+
+            if kind == "aspls":
+                lam = kwargs.pop("lam", 1.0e5)
+                diff_order = kwargs.pop("diff_order", 2)
+                bs, _ = pybaselines.whittaker.aspls(ys, x_data=xs, 
+                                                     lam=lam, diff_order=diff_order,
+                                                     **kwargs)
+            elif kind == "arpls":
+                lam = kwargs.pop("lam", 1.0e5)
+                diff_order = kwargs.pop("diff_order", 2)
+                bs, _ = pybaselines.whittaker.arpls(ys, x_data=xs,
+                                                     lam=lam, diff_order=diff_order, 
+                                                     **kwargs)
+            elif kind == "mor":
+                bs, _ = pybaselines.morphological.mor(ys, x_data=xs, **kwargs)
+
+            ys[:] -= bs
+                
             np.putmask(ys, ys < 0, 0)
     
