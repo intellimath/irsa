@@ -12,7 +12,7 @@ from setuptools.extension import Extension
 
 setup(
     name = 'irsa',
-    version = '0.0',
+    version = '0.1',
     description = 'Intelligent Raman Spectra Analysis',
     author = 'Zaur Shibzukhov',
     author_email = "szport@gmail.com",
@@ -26,7 +26,7 @@ setup(
                 'irsa.spectra', 
                 'irsa.preprocess', 
                 'irsa.preprocess.despike', 'irsa.preprocess.smooth',
-                'irsa.plots',
+                'irsa.plots', 'irsa.widgets',
                ],
     # package_data = {'': ['*.pxd']},
     # url = 'https://bitbucket.org/intellimath/mlgrad',

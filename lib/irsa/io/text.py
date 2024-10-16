@@ -50,6 +50,9 @@ def read_spectras_attrs(dirname):
         if not line:
             continue
 
+        if line[0] == '#':
+            continue
+
         if ":" not in line:
             raise ValueError("В строке отсутствует ':'")
         name, value = line.split(":")
@@ -98,9 +101,11 @@ def load_txt_dir(path, delimiter="\t"):
         
     return Xs, Ys
 
-def load_spectras(root, options=None):
+def load_spectras(root, options, clear=True):
     import os
 
+    # if clear:
+    #     dd.clear()
     dd = {}
     for entry in os.scandir(root):
         if not entry.is_dir():
@@ -114,7 +119,7 @@ def load_spectras(root, options=None):
 
         dd.update(ret)
 
-    dd = {k:dd[k] for k in dd.keys()}
+    # dd.update({k:dd[k] for k in dd.keys()})
     
     return dd
 
@@ -131,7 +136,7 @@ def load_experiment_spectras(dirpath, options=None):
         return None
     
     Xs, Ys = load_txt_dir(dirpath)
-    print("file:", os.path.split(dirpath)[-1])
+    # print("file:", os.path.split(dirpath)[-1])
 
 
     if len(Ys[0].shape) > 1:

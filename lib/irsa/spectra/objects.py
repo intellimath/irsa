@@ -30,21 +30,28 @@ class ExperimentSpectrasSeries:
         i_slider.layout.width="50%"
         
         f_slider = ipywidgets.FloatSlider(value=3.5, min=1.0, max=10.0)
-        f_slider.layout.width="50%"        
+        f_slider.layout.width="50%"   
+        
+        xrange_slider = ipywidgets.IntRangeSlider(
+            value=(min(self.x[0]), max(self.x[0])), 
+            min=min(self.x[0]), 
+            max=max(self.x[0]))
+        xrange_slider.layout.width="50%"
 
-        @ipywidgets.interact(i=i_slider, f=f_slider, zscore=False)
-        def _plot_spectras(i, f, zscore):
-            # i_slider.value=i
+        @ipywidgets.interact(i=i_slider, f=f_slider, xrange=xrange_slider)
+        def _plot_spectras(i, f, xrange):
             plt.figure(figsize=(12,4))
             plt.title(self.key)
-            i = i_slider.value
             xs = self.x[i]
             Ys = self.y[i]
             for ys in Ys:
                 plt.plot(xs, ys, linewidth=0.75)
+
+            plt.plot(xs, utils.robust_mean2(Ys, tau=f), linewidth=1.0, color='k')
                 
             plt.minorticks_on()
             plt.tight_layout()
+            plt.xlim(*xrange)
             plt.show()
     #
     def crop(self, start_index, end_index=None):
@@ -73,6 +80,18 @@ class ExperimentSpectrasSeries:
             ys = Ys[k]
             for y in ys:
                 y[:] -= y.min()
+    #
+    def scale(self, method="robust"):
+        if method == "robust":
+            mean = np.median
+        else:
+            mean = np.mean
+
+        Ys = self.y
+        for k in range(len(Ys)):
+            ys = Ys[k]
+            for y in ys:
+                y[:] = y / mean(y)
     #
     def smooth(self, tau=1.0):
         Ys = self.y
@@ -160,15 +179,22 @@ class ExperimentSpectrasSeries:
             raise TypeError("Усреднять можно только в сериях")
 
         Ys = self.y.copy()
+        dYs = []
         for k in range(len(Ys)):
-            ys = robust_mean2(Ys[k], tau=tau)
+            ys_k = Ys[k]
+            ys = robust_mean2(ys_k, tau=tau)
+            dys = robust_mean2(abs(ys_k - ys), tau=tau)
+            dYs.append(dys)
             ys -= ys.min()
             Ys[k] = ys
 
         Ys = np.ascontiguousarray(Ys)
         Xs = np.ascontiguousarray(self.x)
 
-        return ExperimentSpectras(Xs, Ys, self.attrs)
+        o = ExperimentSpectras(Xs, Ys, self.attrs)
+        o.key = self.key
+        o.dy = np.array(dYs)
+        return o
     #
 
 class ExperimentSpectras:
@@ -291,14 +317,90 @@ class ExperimentSpectras:
             for k in range(len(Ys)):
                 ys = Ys[k]
                 xs = Xs[k]
-                # func = kwargs.get("func", None)
-                # func2 = kwargs.get("func2", None)
-                ys[:] = smooth.whittaker_smooth(ys, tau=tau)
-                np.putmask(ys, ys < 0, 0)
-
+                ys[:] = smooth.whittaker_smooth(ys, tau=tau, solver="fast")
+        np.putmask(ys, ys < 0, 0)
     #
-    def get_baselines(self, kind="aspls", **kwargs):
+    def select_baselines(self, kind="irsa", tau=1000.0, **kwargs):
+        import matplotlib.pyplot as plt
+        import ipywidgets
+
+        N = len(self.x)
+        self.tau_values = N * [tau]
+        
+        i_slider = ipywidgets.IntSlider(min=0, max=len(self.y)-1)
+        i_slider.layout.width="50%"
+
+        tau_slider = ipywidgets.FloatSlider(value=self.tau_values[0], min=1.0, max=tau, step=1.0)
+        tau_slider.layout.width="80%"   
+        
+        def tau_on_value_change(change):
+            i = i_slider.value
+            self.tau_values[i] = tau_slider.value
+
+        def i_on_value_change(change):
+            i = i_slider.value
+            tau_slider.value = self.tau_values[i]
+        
+        tau_slider.on_trait_change(tau_on_value_change, name="value")
+        i_slider.on_trait_change(i_on_value_change, name="value")
+                
+        xrange_slider = ipywidgets.IntRangeSlider(
+            value=(min(self.x[0]), max(self.x[0])), 
+            min=min(self.x[0]), 
+            max=max(self.x[0]))
+        xrange_slider.layout.width="50%"
+
+        @ipywidgets.interact(i=i_slider, tau=tau_slider, xrange=xrange_slider)
+        def _plot_spectras(i, tau, xrange):
+            plt.figure(figsize=(13,5))
+            plt.title(self.key)
+            for xs, ys in zip(self.x, self.y):
+                plt.plot(xs, ys, linewidth=0.25, alpha=0.25)
+
+            xs_i = self.x[i]
+            ys_i = self.y[i]
+            plt.plot(xs_i, ys_i, linewidth=1.0, color='k')
+            plt.fill_between(xs_i, ys_i - self.dy[i], ys_i + self.dy[i], color='LightBlue', alpha=0.5)
+            
+            ys_i_smooth = ys_i
+            # ys_i_smooth = smooth.whittaker_smooth(ys_i, tau=1.0, solver="fast")
+
+            def rel_error(E,Z):
+                abs_E = abs(E)
+                return abs_E / max(abs_E)
+            def sign2(E):
+                return expit(-E / np.median(abs(E)) / 3)
+            def sign(E):
+                e = 10
+                return (1 - E / np.sqrt(e*e + E*E))/2
+
+            bs, _ = smooth.whittaker_smooth_weight_func(
+                ys_i_smooth, weight_func=sign, weight_func2=rel_error, tau=self.tau_values[i], d=2, solver="fast")
+    
+            plt.plot(xs_i, bs, linewidth=1.0, color='m')
+
+            bs_max = np.max(bs)
+            plt.ylim(-100, 2*bs_max)
+
+            x_min, x_max = xrange
+            plt.xlim(x_min-50, x_max+50)
+                        
+            plt.minorticks_on()
+            plt.tight_layout()
+            plt.show()
+    #
+    def get_baselines(self, kind="irsa", **kwargs):
         import pybaselines
+
+        def rel_error(E,Z):
+            abs_E = abs(E)
+            return abs_E / max(abs_E)
+        def sign2(E):
+            return expit(-E / np.median(abs(E)) / 3)
+        def sign(E):
+            e = 1
+            return (1 - E / np.sqrt(e*e + E*E))/2
+        
         
         Xs = self.x
         Ys = self.y
@@ -322,16 +424,30 @@ class ExperimentSpectras:
             elif kind == "mor":
                 bs, _ = pybaselines.morphological.mor(ys, x_data=xs, **kwargs)
 
+            elif kind == "irsa":
+                lam = kwargs.pop("lam", 1.0e3)
+                bs, _ = smooth.whittaker_smooth_weight_func(
+                        ys, weight_func=sign, weight_func2=rel_error, tau=1000.0, d=2, solver="fast")
+        
         Bs.append(bs)
 
         return Bs
         
-    def subtract_baseline(self, kind="aspls", **kwargs):
+    def subtract_baseline(self, kind="irsa", **kwargs):
         import pybaselines
+
+        def rel_error(E,Z):
+            abs_E = abs(E)
+            return abs_E / max(abs_E)
+        def sign2(E):
+            return expit(-E / np.median(abs(E)) / 3)
+        def sign(E):
+            e = 1
+            return (1 - E / np.sqrt(e*e + E*E))/2
         
         Xs = self.x
         Ys = self.y
-        Bs = []
+        # Bs = []
         for k in range(len(Ys)):
             ys = Ys[k]
             xs = Xs[k]
@@ -351,7 +467,67 @@ class ExperimentSpectras:
             elif kind == "mor":
                 bs, _ = pybaselines.morphological.mor(ys, x_data=xs, **kwargs)
 
-            ys[:] -= bs
+            elif kind == "irsa":
+                lam = kwargs.pop("lam", 1.0e3)
+                bs, _ = smooth.whittaker_smooth_weight_func(
+                        ys, weight_func=sign, weight_func2=rel_error, tau=1000.0, d=2, solver="fast")
+            
+            ys[:] = ys - bs
                 
             np.putmask(ys, ys < 0, 0)
+    #
+    def plot_spectras(self, ax=None, baseline=True):
+        import matplotlib.pyplot as plt
+        import ipywidgets
+        
+        i_slider = ipywidgets.IntSlider(min=0, max=len(self.y)-1)
+        i_slider.layout.width="50%"
+        
+        # f_slider = ipywidgets.FloatSlider(value=3.5, min=1.0, max=10.0)
+        # f_slider.layout.width="50%"   
+        
+        xrange_slider = ipywidgets.IntRangeSlider(
+            value=(min(self.x[0]), max(self.x[0])), 
+            min=min(self.x[0]), 
+            max=max(self.x[0]))
+        xrange_slider.layout.width="50%"
+
+        @ipywidgets.interact(i=i_slider, xrange=xrange_slider)
+        def _plot_spectras(i, xrange):
+            plt.figure(figsize=(12,4))
+            plt.title(self.key)
+            for xs, ys in zip(self.x, self.y):
+                plt.plot(xs, ys, linewidth=0.5, alpha=0.25)
+
+            xs_i = self.x[i]
+            ys_i = self.y[i]
+            plt.plot(xs_i, ys_i, linewidth=1.5, color='k')
+            
+            ys_i_smooth = ys_i
+            # ys_i_smooth = smooth.whittaker_smooth(ys_i, tau=1.0, solver="fast")
+
+            def rel_error(E,Z):
+                abs_E = abs(E)
+                return abs_E / max(abs_E)
+            def sign2(E):
+                return expit(-E / np.median(abs(E)) / 3)
+            def sign(E):
+                e = 1
+                return (1 - E / np.sqrt(e*e + E*E))/2
+
+            if baseline:
+                bs, _ = smooth.whittaker_smooth_weight_func(
+                    ys_i_smooth, weight_func=sign, weight_func2=rel_error, tau=1000.0, d=2, solver="fast")
+    
+                plt.plot(xs_i, bs, linewidth=1.5, color='m')
+
+            x_min, x_max = xrange
+            y_max = np.max(ys_i[(x_min <= xs_i) & (xs_i <= x_max)]) + 100
+            plt.ylim(-100, y_max+100)
+            
+            plt.minorticks_on()
+            plt.tight_layout()
+            plt.xlim(x_min-50, x_max+50)
+            plt.show()
+    #
     
