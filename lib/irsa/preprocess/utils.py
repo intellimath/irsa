@@ -1,4 +1,5 @@
 import numpy as np
+import mlgrad.inventory as inventory
 
 def zscore(y):  
     s = y - y.mean()
@@ -39,8 +40,8 @@ def robust_mean(y, tau=3.5, zscore=modified_zscore):
 
 def robust_mean2(yy, tau=3.5, _mean=np.median, _std=np.median, _fromiter=np.fromiter, _C=1/0.67449):
     mu = _mean(yy, axis=0)
-    sigma = _C * _std(abs(yy - mu), axis=0)
-    th = tau * sigma
+    sigma = _std(abs(yy - mu), axis=0)
+    th = (_C * tau) * sigma
     mask = (yy <= (mu + th)) & (yy >= (mu - th))
 
     N = yy.shape[1]

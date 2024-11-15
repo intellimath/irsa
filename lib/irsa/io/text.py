@@ -118,9 +118,34 @@ def load_spectras(root, options, clear=True):
         ret = load_experiment_spectras_all(dirpath, options)
 
         dd.update(ret)
-
-    # dd.update({k:dd[k] for k in dd.keys()})
     
+    return dd
+
+def load_experiment_spectras_all(root, options=None):
+    dd = {}
+    for entry in os.scandir(root):
+        if not entry.is_dir():
+            continue
+        
+        dirname = entry.name
+        # print("\t", dirname)
+        dirpath = f"{root}/{dirname}"
+
+        spectras = load_experiment_spectras(dirpath, options)
+        if spectras is None:
+            continue
+
+        attrs = spectras.attrs
+        attr_names = (
+            "вид_бактерий", "штамм_бактерий", "резистентность", 
+            "отсечки_по_молекулярной_массе", "начальная_концентрация_клеток_в_пробе", 
+            "номер_эксперимента_в_цикле", 
+            "номер_повтора", "дата", "комментарий"
+        )
+        key = "_".join(
+            attrs[k] for k in attr_names)
+        dd[key] = spectras
+
     return dd
 
 def load_experiment_spectras(dirpath, options=None):
@@ -143,32 +168,6 @@ def load_experiment_spectras(dirpath, options=None):
         return ExperimentSpectrasSeries(Xs, Ys, attrs)
     else:
         return ExperimentSpectras(Xs, Ys, attrs)
-
-def load_experiment_spectras_all(root, options=None):
-    dd = {}
-    for entry in os.scandir(root):
-        if not entry.is_dir():
-            continue
-        
-        dirname = entry.name
-        # print("\t", dirname)
-        dirpath = f"{root}/{dirname}"
-
-        spectras = load_experiment_spectras(dirpath, options)
-        if spectras is None:
-            continue
-
-        attrs = spectras.attrs
-        attr_names = (
-            "вид_бактерий", "штамм_бактерий", "резистентность", 
-            "отсечки_по_молекулярной_массе", "начальная_концентрация_клеток_в_пробе", 
-            "номер_эксперимента_в_цикле", "номер_повтора", "дата", "комментарий"
-        )
-        key = "_".join(
-            attrs[k] for k in attr_names)
-        dd[key] = spectras
-
-    return dd
 
 def collect_attr_values(root):
     attrs = {}
