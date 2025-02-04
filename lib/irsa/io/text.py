@@ -69,6 +69,22 @@ def read_spectras_attrs(dirname):
 
     return ret
 
+def load_txt_spectras(path, delimiter="\t"):  
+    
+    xy = np.loadtxt(path, delimiter=delimiter)
+
+    x = xy[:,0]
+    ys = xy[:,1:]
+    
+    if ys.shape[1] == 1:
+        ys = np.ascontiguousarray(ys[:,0])
+    elif ys.shape[1] > 1:
+        ys = np.ascontiguousarray(ys.T)
+    
+    x = np.ascontiguousarray(x)
+
+    return x, ys
+
 def load_txt_dir(path, delimiter="\t"):
     """
     """
@@ -83,17 +99,19 @@ def load_txt_dir(path, delimiter="\t"):
         if fname == "attrs.txt":
             continue
 
-        xy = np.loadtxt(f"{path}/{fname}", delimiter=delimiter)
+        x, ys = load_txt_spectras(f"{path}/{fname}", delimiter=delimiter)
 
-        x = xy[:,0]
-        ys = xy[:,1:]
+        # xy = np.loadtxt(f"{path}/{fname}", delimiter=delimiter)
+
+        # x = xy[:,0]
+        # ys = xy[:,1:]
         
-        if ys.shape[1] == 1:
-            ys = np.ascontiguousarray(ys[:,0])
-        elif ys.shape[1] > 1:
-            ys = np.ascontiguousarray(ys.T)
+        # if ys.shape[1] == 1:
+        #     ys = np.ascontiguousarray(ys[:,0])
+        # elif ys.shape[1] > 1:
+        #     ys = np.ascontiguousarray(ys.T)
         
-        x = np.ascontiguousarray(x)    
+        # x = np.ascontiguousarray(x)    
             
         Xs.append(x)
         # Ys.append(np.power(ys, 0.25))

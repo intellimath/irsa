@@ -11,6 +11,8 @@ import mlgrad.inventory as inventory
 import mlgrad.array_transform as array_transform
 import scipy.special as special
 
+from mlgrad.af import averaging_function
+
 class ExperimentSpectrasSeries:
     #
     def __init__(self, x, y, attrs):
@@ -52,17 +54,33 @@ class ExperimentSpectrasSeries:
             for ys in Ys:
                 plt.plot(xs, ys, linewidth=0.75)
 
-            plt.plot(xs, inventory.robust_mean_2d_t(Ys, tau=f), linewidth=1.0, color='k')
+            ys_m = inventory.robust_mean_2d_t(Ys, tau=f)
+            std = inventory.robust_mean_2d_t(abs(Ys - ys_m), tau=f)
+
+            plt.fill_between(xs, ys_m-2*std, ys+2*std, alpha=0.5)
+            plt.plot(xs, ys_m, linewidth=1.5, color='k')
                 
             plt.minorticks_on()
             plt.tight_layout()
             plt.xlim(*xrange)
             plt.show()
+            
+            # plt.figure(figsize=(12,4))
+            # plt.title(self.key)
+            # xs = self.x[i]
+            # Ys = self.y[i]
+            # # ys_m = inventory.robust_mean_2d_t(Ys, tau=f)
+            # Zs = utils.modified_zscore2(abs(Ys - ys_m))
+            # for zs in Zs:
+            #     plt.plot(xs, abs(zs), linewidth=0.75)
+            # plt.xlim(*xrange)
+            # plt.show()
     #
     def crop(self, start_index, end_index=None):
         Xs = self.x
-        Ys = self.y
-        for k in range(len(Ys)):
+        Ys = self.y 
+        N = len(Ys)
+        for k in range(N):
             if end_index is None:
                 Xs[k] = np.ascontiguousarray(Xs[k][start_index:])
                 Ys[k] = np.ascontiguousarray(Ys[k][:,start_index:])
@@ -86,21 +104,36 @@ class ExperimentSpectrasSeries:
             for y in ys:
                 y[:] -= y.min()
     #
-    def scale(self, delta=3.0):
+    def scale_zs(self, delta=3.0):
         Ys = self.y
         for k in range(len(Ys)):
             ys = Ys[k]
             for y in ys:
-                z = abs(utils.modified_zscore(y))
-                mu = y[z > delta].mean()
+                z = abs(array_transform.array_modified_zscore(y))
+                mu = y[z <= delta].mean()
                 y[:] = y / mu
+    #
+    def to_modified_zscore(self, delta=3.0):
+        Ys = self.y
+        for k in range(len(Ys)):
+            ys = Ys[k]
+            for y in ys:
+                z = array_transform.array_modified_zscore(y)
+                y[:] = z
+    #
+    def scale_min(self):
+        Ys = self.y
+        for k in range(len(Ys)):
+            ys = Ys[k]
+            for y in ys:
+                y[:] = y / y.min()
     #
     def smooth(self, tau=1.0):
         Ys = self.y
         for k in range(len(Ys)):
             ys = Ys[k]
             for y in ys:
-                y[:] = smooth.whittaker_smooth(y, tau=tau, d=2, solver="fast")[0]
+                y[:] = smooth.whittaker_smooth_func2(y, tau=tau, d=2, solver="fast")[0]
     #
     def remove_overflow_spectras(self, y_max=2000.0, y_max_count=10):
         Xs, Ys = self.x, self.y
@@ -188,7 +221,6 @@ class ExperimentSpectrasSeries:
             ys = inventory.robust_mean_2d_t(ys_k, tau=tau)
             dys = inventory.robust_mean_2d_t(abs(ys_k - ys), tau=tau)
             dYs.append(dys)
-            # ys -= ys.min()
             Ys[k] = ys
 
         Ys = np.ascontiguousarray(Ys)
@@ -196,7 +228,7 @@ class ExperimentSpectrasSeries:
 
         o = ExperimentSpectras(Xs, Ys, self.attrs)
         o.key = self.key
-        o.dy = np.array(dYs)
+        o.stderr = np.array(dYs)
         return o
     #
 
@@ -232,6 +264,8 @@ class ExperimentSpectras:
         self.x = x
         self.y = y
         self.attrs = attrs
+        self.bs = np.zeros_like(y)
+        self.params = {}
     #
     def crop(self, start_index, end_index=None):
         if end_index is None:
@@ -274,12 +308,14 @@ class ExperimentSpectras:
     #         # ys /= np.mean(ys)
     #         ys *= len
     # #
-    def scale(self, delta=3.5, scale=100):
-        Ys = self.y
-        for k in range(len(Ys)):
-            ys = Ys[k]
-            mu = utils.robust_mean(ys)
+    def scale(self, tau=3.5, scale=100):
+        N = len(self.y)
+        for k in range(N):
+            ys = self.y[k]
+            err = self.stderr[k]
+            mu = utils.robust_mean(ys, tau=tau)
             ys[:] = (ys / mu) * scale
+            err[:] = (err / mu) * scale
     #
     def remove_overflow_spectras(self, y_max=1500, y_max_count=100):
         Xs, Ys = self.x, self.y
@@ -349,9 +385,10 @@ class ExperimentSpectras:
         
         self.y = Ys
     #
-    def smooth(self, method="runpy", tau=1.0, **kwargs):
+    def smooth(self, method="irsa2", tau=1.0, **kwargs):
         Xs = self.x
         Ys = self.y
+        solver = kwargs.get("solver", "fast")
         if method == "runpy":
             for k in range(len(Ys)):
                 ys = Ys[k]
@@ -361,33 +398,81 @@ class ExperimentSpectras:
             for k in range(len(Ys)):
                 ys = Ys[k]
                 xs = Xs[k]
-                ys[:] = smooth.whittaker_smooth(ys, tau=tau, solver="fast")
-        np.putmask(ys, ys < 0, 0)
+                ys[:] = smooth.whittaker_smooth(ys, tau=tau, solver=solver)
+        elif method == "irsa2":
+            func = kwargs.get("func", funcs.Square())
+            func2 = kwargs.get("func2", None)
+            for k in range(len(Ys)):
+                ys = Ys[k]
+                xs = Xs[k]
+                ys[:], _ = smooth.whittaker_smooth_weight_func(
+                            ys, tau=tau, 
+                            func=func, 
+                            func2=func2, 
+                            solver=solver)
+        # np.putmask(ys, ys < 0, 0)
     #
-    def select_baselines(self, kind="irsa", tau=1000.0, bs_scale=1.5, solver="fast", 
-                         func=None, func2=None, d=2, **kwargs):
+    def select_baselines(self, kind="irsa", tau2=1000.0, tau1=0.0, tau_z=0, tau_smooth=1,
+                         bs_scale=3.0, solver="fast", 
+                         func = None,
+                         func2 = None,                         
+                         func1=None, d=2, func2_mode="d", **kwargs):
         import matplotlib.pyplot as plt
         import ipywidgets
 
-        N = len(self.x)
-        self.tau_values = N * [tau]
+        N = len(self.y)
+        if hasattr(self, "bs"):
+            Bs = self.bs
+        else:        
+            self.bs = Bs = np.zeros((N, len(self.y[0])))
+        
+        params = self.params
+        Ls = params.get("lam", None)
+        
+        self.tau2_values = (N * [tau2])  if Ls is None else Ls
+        self.tau1_values = N * [tau1]
 
-        max_tau = max(self.tau_values)
-        max_tau *= 4
+        tau2_max = max(self.tau2_values)
+        tau2_max *= 20
+
+        # tau1_max = max(self.tau1_values)
+        # tau1_max *= 6
+        
+        # if tau1 < 1.0:
+        #     tau1_min = tau1 / 10.0
+        #     tau1_step = tau1_min
+        # else:
+        #     tau1_min = 1.0
+        #     tau1_step = 1.0
+
+        if tau2 < 1.0:
+            tau2_min = tau2 / 10.0
+            tau2_step = tau2_min
+        else:
+            tau2_min = 1.0
+            tau2_step = 1.0
         
         i_slider = ipywidgets.IntSlider(min=0, max=len(self.y)-1)
         i_slider.layout.width="50%"
 
-        tau_slider = ipywidgets.FloatSlider(value=self.tau_values[0], min=1.0, max=max_tau, step=1.0)
-        tau_slider.layout.width="80%"   
-        
-        def tau_on_value_change(change):
-            i = i_slider.value
-            self.tau_values[i] = tau_slider.value
+        tau2_slider = ipywidgets.FloatSlider(value=self.tau2_values[0], min=tau2_min, max=tau2_max, step=tau2_step)
+        tau2_slider.layout.width="80%"   
 
+        # tau1_slider = ipywidgets.FloatSlider(value=self.tau1_values[0], min=tau1_min, max=tau1_max, step=tau1_step)
+        # tau1_slider.layout.width="80%"   
+        
+        def tau2_on_value_change(change):
+            i = i_slider.value
+            self.tau2_values[i] = tau2_slider.value
+
+        # def tau1_on_value_change(change):
+        #     i = i_slider.value
+        #     self.tau1_values[i] = tau1_slider.value
+            
         def i_on_value_change(change):
             i = i_slider.value
-            tau_slider.value = self.tau_values[i]
+            tau2_slider.value = self.tau2_values[i]
+            # tau1_slider.value = self.tau1_values[i]
 
         def xrange_on_value_change(change):
             xmin, xmax = xrange_slider.value
@@ -398,7 +483,8 @@ class ExperimentSpectras:
             ys = ys[xs >= xmin & xs <= xmax]
             plt.ylim(0.9*min(ys), 1.1*max(ys))
         
-        tau_slider.on_trait_change(tau_on_value_change, name="value")
+        tau2_slider.on_trait_change(tau2_on_value_change, name="value")
+        # tau1_slider.on_trait_change(tau1_on_value_change, name="value")
         i_slider.on_trait_change(i_on_value_change, name="value")
                 
         xrange_slider = ipywidgets.FloatRangeSlider(
@@ -406,80 +492,137 @@ class ExperimentSpectras:
             min=min(self.x[0]), 
             max=max(self.x[0]))
         xrange_slider.layout.width="80%"
-
+        
         # def _func1(E):
         #     return special.expit(-E)
 
-        if func is None:
-            func = funcs.Hinge2()
+        # if func is None:
+        #     func = funcs.SoftHinge_Sqrt(0.001)
 
-        # def _func2(E,Z):
-        #     E = abs(E)
-        #     return E / E.max()
+        # if func1 is None:
+        #     func1 = funcs.RELU()
 
-        if func2 is None:
-            func2 = funcs.Square()
+        # if func2 is None:
+        #     func2 = funcs.SoftHinge_Sqrt(0.001)
 
-        @ipywidgets.interact(i=i_slider, tau=tau_slider, xrange=xrange_slider)
-        def _plot_spectras(i, tau, xrange):
-            plt.figure(figsize=(13,5))
+        # for i in range(len(self.x)):
+        #     xs_i, ys_i = self.x[i], self.y[i]
+        #     ys_i_smooth = smooth.whittaker_smooth(ys_i, tau1=1.0, tau2=1.0, solver=solver)
+        #     bs, _ = smooth.whittaker_smooth_weight_func(
+        #         ys_i_smooth, 
+        #         func=func,
+        #         func1=func1,
+        #         func2=func2, 
+        #         tau1=self.tau1_values[i], 
+        #         tau2=self.tau2_values[i], 
+        #         d=d, solver=solver, func2_mode=func2_mode)
+        #     # print(bs)
+        #     self.bs[i,:] = bs
+                    
+        # @ipywidgets.interact(i=i_slider, tau2=tau2_slider, tau1=tau1_slider, xrange=xrange_slider)
+        # def _plot_spectras(i, tau2, tau1, xrange):
+        @ipywidgets.interact(i=i_slider, tau2=tau2_slider, xrange=xrange_slider)
+        def _plot_spectras(i, tau2, xrange):
+            plt.figure(figsize=(13,4))
             plt.title(self.key)
             for xs, ys in zip(self.x, self.y):
-                plt.plot(xs, ys, linewidth=0.25, alpha=0.25)
+                plt.plot(xs, ys, linewidth=0.25, alpha=0.4)
 
             xs_i = self.x[i]
             ys_i = self.y[i]
-            plt.plot(xs_i, ys_i, linewidth=1.0, color='k')
+            plt.plot(xs_i, ys_i, linewidth=1.5, color='Grey')
             # plt.fill_between(xs_i, ys_i - self.dy[i], ys_i + self.dy[i], color='LightBlue', alpha=0.5)
+
+            err_i = self.stderr[i]
+            plt.fill_between(xs_i, ys_i-err_i, ys_i+err_i, alpha=0.5)
+
+            std_err = err_i.mean()
+            
+            def smooth_func2(x, scale=kwargs["ww"]):
+                v = x/scale
+                return 1/(1+abs(v))
             
             # ys_i_smooth = ys_i
-            ys_i_smooth = smooth.whittaker_smooth(ys_i, tau=1.0, solver=solver)
-            plt.plot(xs_i, ys_i_smooth, linewidth=1.0, color='DarkBlue')
+            ys_i_smooth = smooth.whittaker_smooth_weight_func(
+                ys_i, func2=None, tau2=tau_smooth, solver=solver)[0]            
+            plt.plot(xs_i, ys_i_smooth, linewidth=1.5, color='DarkBlue')
 
-            bs, dd = smooth.whittaker_smooth_weight_func2(
+            bs, dd = smooth.whittaker_smooth_weight_func(
                 ys_i_smooth, 
                 func=func,
-                func2=func2, 
-                tau=self.tau_values[i], d=d, solver=solver)
+                func2=func2,
+                # tau1=self.tau1_values[i], 
+                tau2=self.tau2_values[i], 
+                tau_z=tau_z,
+                d=d, solver=solver, func2_mode=func2_mode)
+            # print(bs)
+            self.bs[i,:] = bs
+            # self.y[i,:] = ys_i_smooth
     
             plt.plot(xs_i, bs, linewidth=1.0, color='m')
 
             x_min, x_max = xrange
-            plt.xlim(x_min, x_max)
+            plt.xlim(0.95*x_min, 1.05*x_max)
 
             bs_xrange = bs[(x_min <= xs_i) & (xs_i <= x_max)]
             ys_xrange = ys_i[(x_min <= xs_i) & (xs_i <= x_max)]
             bs_max, bs_min = np.max(bs_xrange), np.min(bs_xrange)
-            plt.ylim(0.95*np.min(ys_xrange), bs_scale*(bs_max))
+            # plt.ylim(0.95*np.min(ys_xrange), bs_scale*(bs_max))
+            plt.ylim(0, bs_scale*(bs_max))
 
                         
             plt.minorticks_on()
             plt.tight_layout()
             plt.grid(1)
             plt.show()
-            
-            # plt.figure(figsize=(10,3))
-            # plt.plot(np.log10(dd['qvals']))
+
+            # plt.figure(figsize=(13,5))
+            # plt.title(self.key)
+            # for xs, ys, bs in zip(self.x, self.y, self.bs):
+            #     plt.plot(xs, ys-bs, linewidth=0.25, alpha=0.25)
+            # plt.plot(self.x[i], self.y[i]-self.bs[i], linewidth=1.0, color='DarkBlue')
+            # plt.xlim(0.95*x_min, 1.05*x_max)
+            # plt.ylim(0, np.max(ys))
             # plt.show()
+             
+            plt.figure(figsize=(10,3))
+            plt.plot(np.log10(dd['qvals']))
+            plt.show()
     #
     def get_baselines(self, kind="irsa", **kwargs):
         import pybaselines
         
         Xs = self.x
         Ys = self.y
-        Bs = []
+
+        N = len(Ys)
+        
+        if hasattr(self, "params"):
+            params = self.params
+        else:
+            self.params = params = {}
+
+        if hasattr(self, "bs"):
+            Bs = self.bs
+        else:        
+            self.bs = Bs = np.zeros((N, len(Ys[0])))
+
+        Ls = params.get("lam", None)
+        if Ls is None:
+            Ls = N * [lam]
+            params["lam"] = Ls
+            
         for k in range(len(Ys)):
             ys = Ys[k]
             xs = Xs[k]
+            lam = Ls[k]
 
             if kind == "aspls":
-                lam = kwargs.get("lam", 1.0e5)
                 diff_order = kwargs.get("diff_order", 2)
                 bs, _ = pybaselines.whittaker.aspls(ys, x_data=xs, 
                                                      lam=lam, diff_order=diff_order,
                                                      **kwargs)
             elif kind == "arpls":
-                lam = kwargs.get("lam", 1.0e5)
                 diff_order = kwargs.get("diff_order", 2)
                 bs, _ = pybaselines.whittaker.arpls(ys, x_data=xs,
                                                      lam=lam, diff_order=diff_order, 
@@ -488,13 +631,15 @@ class ExperimentSpectras:
                 bs, _ = pybaselines.morphological.mor(ys, x_data=xs, **kwargs)
 
             elif kind == "irsa":
-                lam = kwargs.pop("lam", 1.0e3)
-            bs, _ = smooth.whittaker_smooth_weight_func(ys, 
-                        weight_func=array_transform.array_sqrtit, 
-                        weight_func2=array_transform.array_rel_max, 
-                        tau=lam, d=2, solver="fast")
+                func = kwargs["func"]
+                func2 = kwargs["func2"]
+                bs, _ = smooth.whittaker_smooth_weight_func2(
+                            ys, 
+                            func=func, 
+                            func2=func2, 
+                            tau2=lam, d=2, solver="fast")
         
-        Bs.append(bs)
+            Bs[k,:] = bs
 
         return Bs
         
@@ -512,38 +657,17 @@ class ExperimentSpectras:
         
         Xs = self.x
         Ys = self.y
-        # Bs = []
+        Bs = self.bs
         for k in range(len(Ys)):
             ys = Ys[k]
             xs = Xs[k]
-
-            if kind == "aspls":
-                lam = kwargs.pop("lam", 1.0e5)
-                diff_order = kwargs.pop("diff_order", 2)
-                bs, _ = pybaselines.whittaker.aspls(ys, x_data=xs, 
-                                                     lam=lam, diff_order=diff_order,
-                                                     **kwargs)
-            elif kind == "arpls":
-                lam = kwargs.pop("lam", 1.0e5)
-                diff_order = kwargs.pop("diff_order", 2)
-                bs, _ = pybaselines.whittaker.arpls(ys, x_data=xs,
-                                                     lam=lam, diff_order=diff_order, 
-                                                     **kwargs)
-            elif kind == "mor":
-                bs, _ = pybaselines.morphological.mor(ys, x_data=xs, **kwargs)
-
-            elif kind == "irsa":
-                lam = kwargs.pop("lam", 1.0e3)
-                bs, _ = smooth.whittaker_smooth_weight_func(ys, 
-                            weight_func=array_transform.array_sqrtit, 
-                            weight_func2=array_transform.array_rel_max, 
-                            tau=lam, d=2, solver="fast")
-            
+            bs = Bs[k]
             ys[:] = ys - bs
+        Bs.fill(0)
                 
-            np.putmask(ys, ys < 0, 0)
+            # np.putmask(ys, ys < 0, 0)
     #
-    def plot_spectras(self, ax=None, baseline=True):
+    def plot_spectras(self, tau=1.0, ss=100, ax=None, baseline=False, **kwargs):
         import matplotlib.pyplot as plt
         import ipywidgets
         
@@ -568,10 +692,20 @@ class ExperimentSpectras:
 
             xs_i = self.x[i]
             ys_i = self.y[i]
-            plt.plot(xs_i, ys_i, linewidth=1.5, color='k')
+            err_i = self.stderr[i]
+            plt.fill_between(xs_i, ys_i-2*err_i, ys_i+2*err_i, alpha=0.5)
+            plt.plot(xs_i, ys_i, linewidth=1.5, color='Grey', label="original")
+
+            std_err = err_i.mean()
+
+            def func2(x, scale=std_err):
+                v = x/scale
+                return 1/np.sqrt(1+v*v)
             
-            ys_i_smooth = ys_i
-            # ys_i_smooth = smooth.whittaker_smooth(ys_i, tau=1.0, solver="fast")
+            # ys_i_smooth = ys_i
+            ys_i_smooth = smooth.whittaker_smooth_weight_func2(
+                ys_i, func2=None, tau2=tau, solver="scipy")[0]
+            plt.plot(xs_i, ys_i_smooth, linewidth=1.5, color='DarkBlue', label="smoothed")
 
             def rel_error(E):
                 abs_E = abs(E)
@@ -583,7 +717,7 @@ class ExperimentSpectras:
                 return (1 - E / np.sqrt(e*e + E*E))/2
 
             if baseline:
-                bs, _ = smooth.whittaker_smooth_weight_func(
+                bs, _ = smooth.whittaker_smooth_weight_func2(
                     ys_i_smooth, 
                     weight_func=array_transform.array_sqrtit, 
                     weight_func2=array_transform.array_rel_max, 
@@ -599,6 +733,7 @@ class ExperimentSpectras:
             plt.minorticks_on()
             plt.tight_layout()
             plt.xlim(x_min, x_max)
+            plt.legend()
             plt.show()
     #
     

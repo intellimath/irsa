@@ -6,7 +6,7 @@ def zscore(y):
     z = s / s.std()
     return z
 
-def modified_zscore(y, _median=np.median):  
+def modified_zscore(y, _median=inventory.median_1d):  
     med = _median(y)
     s = y - med
     mad = _median(abs(s))
@@ -18,7 +18,7 @@ def modified_zscore(y, _median=np.median):
 
 median_median_zscore = modified_zscore
 
-def median_mean_zscore(y, _median=np.median):  
+def median_mean_zscore(y, _median=inventory.median_1d):  
     med = _median(y)
     s = y - med
     z = 0.67449 * s / (abs(s)).mean()
