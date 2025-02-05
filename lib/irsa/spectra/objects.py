@@ -133,7 +133,7 @@ class ExperimentSpectrasSeries:
         for k in range(len(Ys)):
             ys = Ys[k]
             for y in ys:
-                y[:] = smooth.whittaker_smooth_func2(y, tau=tau, d=2, solver="fast")[0]
+                y[:] = smooth.whittaker_smooth_func2(y, tau=tau, d=2)[0]
     #
     def remove_overflow_spectras(self, y_max=2000.0, y_max_count=10):
         Xs, Ys = self.x, self.y
@@ -388,7 +388,6 @@ class ExperimentSpectras:
     def smooth(self, method="irsa2", tau=1.0, **kwargs):
         Xs = self.x
         Ys = self.y
-        solver = kwargs.get("solver", "fast")
         if method == "runpy":
             for k in range(len(Ys)):
                 ys = Ys[k]
@@ -398,7 +397,7 @@ class ExperimentSpectras:
             for k in range(len(Ys)):
                 ys = Ys[k]
                 xs = Xs[k]
-                ys[:] = smooth.whittaker_smooth(ys, tau=tau, solver=solver)
+                ys[:] = smooth.whittaker_smooth(ys, tau=tau)
         elif method == "irsa2":
             func = kwargs.get("func", funcs.Square())
             func2 = kwargs.get("func2", None)
@@ -408,12 +407,11 @@ class ExperimentSpectras:
                 ys[:], _ = smooth.whittaker_smooth_weight_func(
                             ys, tau=tau, 
                             func=func, 
-                            func2=func2, 
-                            solver=solver)
+                            func2=func2)
         # np.putmask(ys, ys < 0, 0)
     #
     def select_baselines(self, kind="irsa", tau2=1000.0, tau1=0.0, tau_z=0, tau_smooth=1,
-                         bs_scale=3.0, solver="fast", 
+                         bs_scale=3.0, 
                          func = None,
                          func2 = None,                         
                          func1=None, d=2, func2_mode="d", **kwargs):
@@ -507,7 +505,7 @@ class ExperimentSpectras:
 
         # for i in range(len(self.x)):
         #     xs_i, ys_i = self.x[i], self.y[i]
-        #     ys_i_smooth = smooth.whittaker_smooth(ys_i, tau1=1.0, tau2=1.0, solver=solver)
+        #     ys_i_smooth = smooth.whittaker_smooth(ys_i, tau1=1.0, tau2=1.0)
         #     bs, _ = smooth.whittaker_smooth_weight_func(
         #         ys_i_smooth, 
         #         func=func,
@@ -515,7 +513,7 @@ class ExperimentSpectras:
         #         func2=func2, 
         #         tau1=self.tau1_values[i], 
         #         tau2=self.tau2_values[i], 
-        #         d=d, solver=solver, func2_mode=func2_mode)
+        #         d=d, func2_mode=func2_mode)
         #     # print(bs)
         #     self.bs[i,:] = bs
                     
@@ -544,7 +542,7 @@ class ExperimentSpectras:
             
             # ys_i_smooth = ys_i
             ys_i_smooth = smooth.whittaker_smooth_weight_func(
-                ys_i, func2=None, tau2=tau_smooth, solver=solver)[0]            
+                ys_i, func2=None, tau2=tau_smooth)[0]            
             plt.plot(xs_i, ys_i_smooth, linewidth=1.5, color='DarkBlue')
 
             bs, dd = smooth.whittaker_smooth_weight_func(
@@ -554,7 +552,8 @@ class ExperimentSpectras:
                 # tau1=self.tau1_values[i], 
                 tau2=self.tau2_values[i], 
                 tau_z=tau_z,
-                d=d, solver=solver, func2_mode=func2_mode)
+                d=d, 
+                func2_mode=func2_mode)
             # print(bs)
             self.bs[i,:] = bs
             # self.y[i,:] = ys_i_smooth
@@ -637,7 +636,7 @@ class ExperimentSpectras:
                             ys, 
                             func=func, 
                             func2=func2, 
-                            tau2=lam, d=2, solver="fast")
+                            tau2=lam, d=2)
         
             Bs[k,:] = bs
 
@@ -704,7 +703,7 @@ class ExperimentSpectras:
             
             # ys_i_smooth = ys_i
             ys_i_smooth = smooth.whittaker_smooth_weight_func2(
-                ys_i, func2=None, tau2=tau, solver="scipy")[0]
+                ys_i, func2=None, tau2=tau)[0]
             plt.plot(xs_i, ys_i_smooth, linewidth=1.5, color='DarkBlue', label="smoothed")
 
             def rel_error(E):
@@ -721,7 +720,7 @@ class ExperimentSpectras:
                     ys_i_smooth, 
                     weight_func=array_transform.array_sqrtit, 
                     weight_func2=array_transform.array_rel_max, 
-                    tau=1000.0, d=2, solver="fast")
+                    tau=1000.0, d=2)
     
                 plt.plot(xs_i, bs, linewidth=1.5, color='m')
 
