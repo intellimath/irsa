@@ -115,7 +115,7 @@ class ExperimentSpectrasSeries:
         # b_exclude.on_trait_change(b_on_value_change, name="value")
 
         @ipywidgets.interact(i=i_slider, xrange=xrange_slider)
-        def _plot_spectras(i, f, xrange):
+        def _plot_spectras(i, xrange):
             plt.figure(figsize=(12,4))
             plt.title(self.key)
             xs = self.x[i]
@@ -739,29 +739,18 @@ class ExperimentSpectras:
 
         return Bs
         
-    def subtract_baseline(self, kind="irsa", **kwargs):
-        import pybaselines
-
-        def rel_error(E,Z):
-            abs_E = abs(E)
-            return abs_E / max(abs_E)
-        def sign2(E):
-            return expit(-E / np.median(abs(E)) / 3)
-        def sign(E):
-            e = 1
-            return (1 - E / np.sqrt(e*e + E*E))/2
-        
-        Xs = self.x
-        Ys = self.y
-        Bs = self.bs
-        for k in range(len(Ys)):
-            ys = Ys[k]
-            xs = Xs[k]
-            bs = Bs[k]
-            ys[:] = ys - bs
-        Bs.fill(0)
-                
-            # np.putmask(ys, ys < 0, 0)
+    def subtract_selected_baseline(self):
+        self.x -= self.bs
+        self.bs.fill(0)
+        # Xs = self.x
+        # Ys = self.y
+        # Bs = self.bs
+        # for k in range(len(Ys)):
+        #     ys = Ys[k]
+        #     xs = Xs[k]
+        #     bs = Bs[k]
+        #     ys[:] = ys - bs
+        # Bs.fill(0)
     #
     def plot_spectras(self, tau=1.0, ss=100, ax=None, func2=None, **kwargs):
         import matplotlib.pyplot as plt

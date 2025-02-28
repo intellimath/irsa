@@ -144,7 +144,7 @@ def load_experiment_spectras_all(root, options=None):
     for entry in os.scandir(root):
         if not entry.is_dir():
             continue
-        
+
         dirname = entry.name
         # print("\t", dirname)
         dirpath = f"{root}/{dirname}"
