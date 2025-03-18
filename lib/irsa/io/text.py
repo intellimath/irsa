@@ -2,8 +2,15 @@ import os
 import numpy as np
 from datetime import date
 from irsa.preprocess import utils
-from irsa.spectra.objects import ExperimentSpectrasSeries, ExperimentSpectras
+from irsa.spectra import ExperimentSpectraSeries, ExperimentSpectra, SpectraCollection
 # from recordclass import make_dataclass
+
+_default_keys = [
+    'дата', 'вид_бактерий', 'штамм_бактерий', 
+    'резистентность', 'отсечки_по_молекулярной_массе',
+    'начальная_концентрация_клеток_в_пробе', 'номер_повтора', 
+    'номер_эксперимента_в_цикле', "комментарий"]
+
 
 def parse_file_name(fname, attr_names):
     items = items.split('_')
@@ -62,8 +69,8 @@ def read_spectras_attrs(dirname):
             name = name.replace(" ", "_")
         
         value = value.strip()
-        if "," in value:
-            value = [v.strip() for v in value.split(",")]
+        # if "," in value:
+        #     value = [v.strip() for v in value.split(",")]
 
         ret[name] = value
 
@@ -135,7 +142,9 @@ def load_spectras(root, options, clear=True):
     
         ret = load_experiment_spectras_all(dirpath, options)
 
-        dd.update(ret)
+        for key in ret:
+            dd[key] = ret[key]
+        # dd.update(ret)
     
     return dd
 
@@ -154,17 +163,14 @@ def load_experiment_spectras_all(root, options=None):
             continue
 
         attrs = spectras.attrs
-        attr_names = (
-            "вид_бактерий", "штамм_бактерий", "резистентность", 
-            "отсечки_по_молекулярной_массе", "начальная_концентрация_клеток_в_пробе", 
-            "номер_эксперимента_в_цикле", 
-            "номер_повтора", "дата", "комментарий"
-        )
+        attr_names = _default_keys
         key = "_".join(
             attrs[k] for k in attr_names)
         dd[key] = spectras
+        spectras.attrs["key"] = key
+        spectras.attrs["root"] = root
 
-    return dd
+    return SpectraCollection(dd)
 
 def load_experiment_spectras(dirpath, options=None):
     attrs = read_spectras_attrs(dirpath)
@@ -179,13 +185,14 @@ def load_experiment_spectras(dirpath, options=None):
         return None
     
     Xs, Ys = load_txt_dir(dirpath)
+    # print(len(Xs), len(Ys))
     # print("file:", os.path.split(dirpath)[-1])
 
 
     if len(Ys[0].shape) > 1:
-        return ExperimentSpectrasSeries(Xs, Ys, attrs)
+        return ExperimentSpectraSeries(Xs, Ys, attrs)
     else:
-        return ExperimentSpectras(Xs, Ys, attrs)
+        return ExperimentSpectra(Xs, Ys, attrs)
 
 def collect_attr_values(root):
     attrs = {}
@@ -215,6 +222,7 @@ def collect_experiment_attrs(root, attrs):
 
         ret = read_spectras_attrs(dirpath)
         for key,val in ret.items():
+            # print(key, val)
             vals = attrs.setdefault(key, set())
             if val not in vals:
                 vals.add(val)

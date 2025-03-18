@@ -2,5 +2,5 @@
 #
 #
 
-from .objects import ExperimentSpectras, ExperimentSpectrasSeries
+from .objects import ExperimentSpectra, ExperimentSpectraSeries, SpectraCollection
 
