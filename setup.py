@@ -26,7 +26,7 @@ setup(
                 'irsa.spectra', 
                 'irsa.preprocess', 
                 'irsa.preprocess.despike', 'irsa.preprocess.smooth',
-                'irsa.plots', 'irsa.widgets',
+                'irsa.plots', 'irsa.widgets', 'irsa.analytics',
                ],
     # package_data = {'': ['*.pxd']},
     # url = 'https://bitbucket.org/intellimath/mlgrad',

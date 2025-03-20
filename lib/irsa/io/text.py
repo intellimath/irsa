@@ -65,6 +65,8 @@ def read_spectras_attrs(dirname):
         name, value = line.split(":")
         
         name = name.strip()
+        if "  " in name:
+            name = name.replace("  ", " ")
         if " " in name:
             name = name.replace(" ", "_")
         
@@ -188,11 +190,15 @@ def load_experiment_spectras(dirpath, options=None):
     # print(len(Xs), len(Ys))
     # print("file:", os.path.split(dirpath)[-1])
 
+    mesure_type = attrs["тип_измерения_спектров"]
 
-    if len(Ys[0].shape) > 1:
-        return ExperimentSpectraSeries(Xs, Ys, attrs)
-    else:
-        return ExperimentSpectra(Xs, Ys, attrs)
+    if mesure_type == "SE":
+        if len(Ys[0].shape) > 1:
+            return ExperimentSpectraSeries(Xs, Ys, attrs)
+        else:
+            return ExperimentSpectra(Xs, Ys, attrs)
+    elif mesure_type == "SS":
+            return ExperimentSpectraSeries(Xs, Ys, attrs)
 
 def collect_attr_values(root):
     attrs = {}

@@ -189,7 +189,7 @@ class ExperimentSpectraSeries:
                 # plt.grid(1)
                 plt.show()            
     #
-    def plot_zscore(self):
+    def plot_zscore(self, kind="m-zscore"):
         import matplotlib.pyplot as plt
         import ipywidgets
 
@@ -216,15 +216,23 @@ class ExperimentSpectraSeries:
             Zs = np.empty_like(Ys)
             for j in range(len(xs)):
                 ys_j = Ys[:,j]
-                mu = np.median(ys_j)
-                ss = np.median(abs(ys_j - mu))
-                Zs[:,j] = 0.6748 * (ys_j - mu) / ss  #inventory.modified_zscore(Ys[:,j])
+                if kind == "zscore":
+                    # mu = np.mean(ys_j)
+                    # ss = np.std(ys_j)
+                    Zs[:,j] = inventory.zscore(Ys[:,j])
+                    plt.hlines([-3.0,3.0], min(xs), max(xs), colors='r', linestyles="--")
+                elif kind == "m-zscore":
+                    # mu = np.median(ys_j)
+                    # ss = np.median(abs(ys_j - mu))
+                    Zs[:,j] = inventory.modified_zscore(Ys[:,j])
+                    plt.hlines([-3.5,3.5], min(xs), max(xs), colors='r', linestyles="--")
+                else:
+                    raise TypeError("invalid kind of zscore")
             for zs in Zs:
                 plt.scatter(xs, zs, s=2, c='k', alpha=0.5)
 
             # plt.plot(xs, inventory.robust_mean_2d_t(Zs, 3.5), color="g", linewidth=1.5)
-            
-            plt.hlines([-3.5,3.5], min(xs), max(xs), colors='r', linestyles="--")
+
             plt.minorticks_on()
             plt.show()      
     #
