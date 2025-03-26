@@ -14,7 +14,6 @@ import scipy.special as special
 
 from mlgrad.af import averaging_function
 
-
 class ExperimentSpectraSeries:
     #
     def __init__(self, x, y, attrs):
@@ -30,24 +29,29 @@ class ExperimentSpectraSeries:
         key = "_".join(
             attrs[k] for k in attr_names)
         self.key = key
-        self.excludes = len(x) * [False]
+        self.excludes = []
     #
     def check_spectra(self, ax=None):
         import matplotlib.pyplot as plt
         import ipywidgets
         
-        i_slider = ipywidgets.IntSlider(min=0, max=len(self.y)-1)
+        i_slider = ipywidgets.IntSlider(value=0, min=0, max=len(self.y)-1)
         i_slider.layout.width="50%"
         
-        b_exclude = ipywidgets.Checkbox(value=self.excludes[0])
+        b_exclude = ipywidgets.Checkbox(value=(i_slider.value in self.excludes))
         
         def i_on_value_change(change):
-            # i = i_slider.value
-            b_exclude.value = self.excludes[i]
+            i = i_slider.value
+            b_exclude.value = (i in self.excludes)
 
         def b_on_value_change(change):
-            # i = i_slider.value
-            self.excludes[i] = b_exclude.value
+            i = i_slider.value
+            if b_exclude.value:
+                if i not in self.excludes:
+                    self.excludes.append(i)
+            else:
+                if i in self.excludes:
+                    self.excludes.remove(i)
         
         i_slider.on_trait_change(i_on_value_change, name="value")
         b_exclude.on_trait_change(b_on_value_change, name="value")
@@ -75,9 +79,9 @@ class ExperimentSpectraSeries:
             plt.show()
     #
     def exclude_checked(self):
-        self.x = [x for x, b in zip(self.x, self.excludes) if not b]
-        self.y = [y for y, b in zip(self.y, self.excludes) if not b]
-        self.excludes = len(self.x) * [False]
+        self.x = [x_val for i, x_val in enumerate(self.x) if i not in self.excludes]
+        self.y = [y_val for i, y_val in enumerate(self.y) if i not in self.excludes]
+        self.excludes = []
     #
     def plot_spectra(self):
         import matplotlib.pyplot as plt
@@ -92,14 +96,15 @@ class ExperimentSpectraSeries:
             max=max(self.x[0]))
         xrange_slider.layout.width="90%"
 
-        def i_on_value_change(change):
-            i = i_slider.value
+        # def i_on_value_change(change):
+        #     i = i_slider.value
         
-        i_slider.on_trait_change(i_on_value_change, name="value")
+        # i_slider.on_trait_change(i_on_value_change, name="value")
 
         @ipywidgets.interact(i=i_slider, xrange=xrange_slider, continuous_update=False)
-        def _plot_spectra(i, xrange):            
-            plt.figure(figsize=(10,4))
+        def _plot_spectra(i, xrange):
+            fig = plt.figure(figsize=(10,4))
+            fig.canvas.header_visible = False
             plt.title(f"{self.key} ({len(self.x[i])} spectra)")
             xs = self.x[i]
             Ys = self.y[i]
@@ -110,7 +115,8 @@ class ExperimentSpectraSeries:
             std = np.sqrt(inventory.robust_mean_2d_t((Ys - ys_m)**2, tau=3.5))
             ss = std/ys_m
 
-            plt.fill_between(xs, ys_m-2*std, ys_m+2*std, alpha=0.5, label=fr"$\sigma={std.mean():.0f}\ (\sigma/\mu={ss.mean():.3f}\pm{ss.std():.3f})$")
+            plt.fill_between(xs, ys_m-2*std, ys_m+2*std, alpha=0.5, 
+                             label=fr"$\sigma={std.mean():.0f}\ (\sigma/\mu={ss.mean():.3f}\pm{ss.std():.3f})$")
             plt.plot(xs, ys_m, linewidth=1.5, color='k', label="mean (robust)")
 
             xa, xb = xrange
@@ -121,7 +127,8 @@ class ExperimentSpectraSeries:
             plt.tight_layout()
             plt.ylim(0.95*np.min(Ys[:,i0:i1+1]), 1.05*np.max(Ys[:,i0:i1+1]))
             plt.xlim(*xrange)
-            plt.legend(loc="upper left")
+            # plt.legend(loc="upper left")
+            plt.legend()
             plt.show()            
     #
     def crop(self, start_index, end_index=None):
@@ -300,6 +307,14 @@ class ExperimentSpectraSeries:
             for y in ys:
                 y[:] -= y.min()
     #
+    def scale_pca(self):
+        from np.linalg import det
+        for ys in self.y:
+            Y = ys @ ys.T
+            d = det(Y)
+            
+            
+    #
     def scale_zs(self, delta=3.0):
         Ys = self.y
         for k in range(len(Ys)):
@@ -317,12 +332,19 @@ class ExperimentSpectraSeries:
                 z = array_transform.array_modified_zscore(y)
                 y[:] = z
     #
-    def scale_min(self):
+    def scale_by_min(self, scale=1.0):
         Ys = self.y
         for k in range(len(Ys)):
             ys = Ys[k]
             for y in ys:
-                y[:] = y / y.min()
+                y[:] = (y / y.min()) * scale
+    #
+    def scale_by_max(self, scale=1.0):
+        Ys = self.y
+        for k in range(len(Ys)):
+            ys = Ys[k]
+            for y in ys:
+                y[:] = (y / y.max()) * scale
     #
     def smooth(self, tau=1.0, windows=None, beta=10.):
         Ys = self.y
@@ -732,7 +754,7 @@ class ExperimentSpectra:
         tau2_max *= 20
         if tau2 <= 20.0:
             tau2_min /= 20.0
-            tau2_step = tau2_min
+            tau2_step = tau2_min / 20
         else:
             tau2_min = 1.0
             tau2_step = 1.0
@@ -768,6 +790,9 @@ class ExperimentSpectra:
         def i_on_value_change(change):
             i = i_slider.value
             tau2_slider.value = self.tau2_values[i]
+            tau2_slider.min = tau2_slider.value / 20
+            tau2_slider.max = tau2_slider.value * 20
+            tau2_slider.step = tau2_slider.min
             # tau1_slider.value = self.tau1_values[i]
 
         def xrange_on_value_change(change):
@@ -915,7 +940,7 @@ class ExperimentSpectra:
         @ipywidgets.interact(tau2=tau2_slider, continuous_update=False)
         def _plot_select_spectra_param(tau2):
             plt.close("all")
-            plt.figure(figsize=(13,4))
+            plt.figure(figsize=(13,5))
             plt.title(self.key)
             xs = self.x
             plt.plot(xs, ys, linewidth=1.0, color='k', label='spectra (mean)')
@@ -1072,46 +1097,12 @@ class ExperimentSpectra:
             mu_i = inventory.robust_mean_1d(diff2_i, 3.0)
             dd2_i = inventory.robust_mean_1d(abs(diff2_i - mu_i), 3.0)
             
-            # mu_i = np.median(diff2_i)
-            # dd2_i = (np.percentile(diff2_i, 75) - np.percentile(diff2_i, 25)) / 2
-            # dd2_i = np.median(abs(diff2_i - mu_i))
-            
-            # def smooth_func2(x, mu=mu_i, scale=dd2_i):
-            #     v = (x - mu_i)/scale
-            #     return 1/(1 + v*v)
-
-            # def smooth_func2(x, mu=mu_i, scale=2*dd2_i):
-            #     v = (x - mu_i)/scale
-            #     return np.exp(-v*v/2)
-            
-            # ys_i_smooth = ys_i
-            # ys_i_smooth = smooth.whittaker_smooth_weight_func2(
-            #     ys_i, func2=smooth_func2, tau2=tau)[0]
-
-            # W2 = None
-            # if self.windows:
-            #     W2 = np.full(len(self.y[0]), 1.0, "d")
-            #     xs = self.x[0]
-            #     for xa,xb in self.windows:
-            #         ii = np.argwhere((xs >= xa) & (xs <= xb)).ravel()
-            #         i0, i1 = min(ii), max(ii)
-            #         W2[i0:i1+1] = beta
             
             # ys_i_smooth = smooth.whittaker_smooth(ys_i, tau2=tau, W2=W2, d=2)
             ys_i_smooth = ys_i
-            plt.plot(xs, ys_i_smooth, linewidth=1.5, color='DarkRed', #marker='s', markersize=2,
+            plt.plot(xs, ys_i_smooth, linewidth=1.5, color='DarkRed', 
+                     # marker='s', markersize=2,
                      label=fr"smoothed ($\sigma={std_err_i:.3f}$)")
-
-            # plt.plot(xs_i[1:-1], abs(diff2_i)/max(abs(diff2_i)), color='k')
-
-            # def rel_error(E):
-            #     abs_E = abs(E)smooth_func2
-            #     return abs_E / max(abs_E)
-            # def sign2(E):
-            #     return expit(-E / np.median(abs(E)) / 3)
-            # def sign(E):
-            #     e = 1
-            #     return (1 - E / np.sqrt(e*e + E*E))/2
 
             x_min, x_max = xrange
             ys_range = ys_i[(x_min <= xs) & (xs <= x_max)]
@@ -1188,4 +1179,16 @@ class SpectraCollection:
         for sp in self.spectra.values():
             if sp.attrs[name] == val:
                 yield sp.y
-    #    
+    #
+    def save(self, root):
+        for key, sp in self.spectra.items():
+            xy = np.vstack((self.x, self.y),)
+            np.savefile(f"{root}/{key}.txt",  xy.T)
+    #
+    # def load(self, root):
+    #     for fname in os.listdir(root):
+    #         if not fname.endswith(".txt"):
+    #             continue
+    #         xy = np.loadtxt(f"{root}/{fname}")
+            
+            

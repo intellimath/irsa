@@ -6,11 +6,11 @@ from irsa.spectra import ExperimentSpectraSeries, ExperimentSpectra, SpectraColl
 # from recordclass import make_dataclass
 
 _default_keys = [
-    'дата', 'вид_бактерий', 'штамм_бактерий', 
+    'дата', 'тип_измерения_спектров',
+    'вид_бактерий', 'штамм_бактерий', 
     'резистентность', 'отсечки_по_молекулярной_массе',
     'начальная_концентрация_клеток_в_пробе', 'номер_повтора', 
     'номер_эксперимента_в_цикле', "комментарий"]
-
 
 def parse_file_name(fname, attr_names):
     items = items.split('_')
@@ -188,7 +188,7 @@ def load_experiment_spectras(dirpath, options=None):
     
     Xs, Ys = load_txt_dir(dirpath)
     # print(len(Xs), len(Ys))
-    # print("file:", os.path.split(dirpath)[-1])
+    print(os.path.split(dirpath)[-1], Xs[0].shape, Ys[0].shape, {k:v for k,v in attrs.items() if k in options})
 
     mesure_type = attrs["тип_измерения_спектров"]
 
