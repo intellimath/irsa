@@ -62,7 +62,7 @@ def pca_compare_2d(X1, X2, label1, label2, alpha=0.9999):
 
     dy = y_max - y_min
     dx = x_max - x_min
-    cc = dy / dx
+    # cc = dy / dx
 
     UX, UY = np.meshgrid(
         np.linspace(x_min, x_max, 100),

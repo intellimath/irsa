@@ -6,11 +6,12 @@ from irsa.spectra import ExperimentSpectraSeries, ExperimentSpectra, SpectraColl
 # from recordclass import make_dataclass
 
 _default_keys = [
-    'дата', 'тип_измерения_спектров',
+    'дата', 
     'вид_бактерий', 'штамм_бактерий', 
     'резистентность', 'отсечки_по_молекулярной_массе',
     'начальная_концентрация_клеток_в_пробе', 'номер_повтора', 
-    'номер_эксперимента_в_цикле', "комментарий"]
+    'номер_эксперимента_в_цикле', 'тип_измерения_спектров',
+    "комментарий"]
 
 def parse_file_name(fname, attr_names):
     items = items.split('_')
@@ -101,12 +102,10 @@ def load_txt_dir(path, delimiter="\t"):
 
     Xs = []
     Ys = []
-    for fname in os.listdir(path):
-        if not fname.endswith(".txt"):
-            continue
-
-        if fname == "attrs.txt":
-            continue
+    fnames = os.listdir(path)
+    fnames = [fname for fname in fnames if fname.endswith(".txt") and fname != "attrs.txt"]
+    fnames.sort()
+    for fname in fnames:
 
         x, ys = load_txt_spectras(f"{path}/{fname}", delimiter=delimiter)
 
@@ -170,7 +169,7 @@ def load_experiment_spectras_all(root, options=None):
             attrs[k] for k in attr_names)
         dd[key] = spectras
         spectras.attrs["key"] = key
-        spectras.attrs["root"] = root
+        spectras.attrs["source"] = root
 
     return SpectraCollection(dd)
 
@@ -188,6 +187,7 @@ def load_experiment_spectras(dirpath, options=None):
     
     Xs, Ys = load_txt_dir(dirpath)
     # print(len(Xs), len(Ys))
+    print(dirpath)
     print(os.path.split(dirpath)[-1], Xs[0].shape, Ys[0].shape, {k:v for k,v in attrs.items() if k in options})
 
     mesure_type = attrs["тип_измерения_спектров"]

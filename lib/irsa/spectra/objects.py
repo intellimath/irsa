@@ -435,13 +435,13 @@ class ExperimentSpectraSeries:
             raise TypeError("Усреднять можно только в сериях")
 
         Ys = self.y.copy()
-        dYs = []
+        # dYs = []
         for k in range(len(Ys)):
             ys_k = np.ascontiguousarray(Ys[k])
             # ys_k = Ys[k]
             ys = inventory.robust_mean_2d_t(ys_k, tau=tau)
-            dys = np.sqrt(inventory.robust_mean_2d_t((ys_k - ys)**2, tau=tau))
-            dYs.append(dys)
+            # dys = np.sqrt(inventory.robust_mean_2d_t((ys_k - ys)**2, tau=tau))
+            # dYs.append(dys)
             Ys[k] = ys
 
         Ys = np.ascontiguousarray(Ys)
@@ -449,7 +449,7 @@ class ExperimentSpectraSeries:
 
         o = ExperimentSpectra(Xs, Ys, self.attrs)
         o.key = self.key
-        o.stderr = np.ascontiguousarray(dYs)
+        # o.stderr = np.ascontiguousarray(dYs)
         return o
     #
 
@@ -598,19 +598,19 @@ class ExperimentSpectra:
         N = len(self.y)
         for k in range(N):
             ys = self.y[k]
-            err = self.stderr[k]
+            # err = self.stderr[k]
             mu = inventory.robust_mean_1d(ys, tau=tau)
             ys[:] = (ys / mu) * scale
-            err[:] = (err / mu) * scale
+            # err[:] = (err / mu) * scale
     #    
     def scale_by_max(self, scale=1.0):
         N = len(self.y)
         for k in range(N):
             ys = self.y[k]
-            err = self.stderr[k]
+            # err = self.stderr[k]
             mu = ys.max()
             ys[:] = (ys / mu) * scale
-            err[:] = (err / mu) * scale
+            # err[:] = (err / mu) * scale
     #
     # def remove_overflow_spectra(self, y_max=1500, y_max_count=100):
     #     Xs, Ys = self.x, self.y
@@ -735,16 +735,7 @@ class ExperimentSpectra:
         xs = self.x
 
         for i in range(N):
-            tau2_i = self.tau2_values[i]
-            if override_tau2:
-                self.tau2_values[i] = tau2
-            elif tau2_i == 0:
-                if self.tau2_mean > 0:
-                    self.tau2_values[i] = self.tau2_mean
-                else:
-                    self.tau2_values[i] = tau2
-
-        tau2 = self.tau2_values[0]
+            self.tau2_values[i] = tau2
         
         self.tau1_values = N * [tau1]
 
@@ -825,10 +816,10 @@ class ExperimentSpectra:
             ys_i = self.y[i]
             plt.plot(xs, ys_i, linewidth=1.5, color='k', label="current")
 
-            err_i = self.stderr[i]
-            plt.fill_between(xs, ys_i-err_i, ys_i+err_i, alpha=0.5)
+            # err_i = self.stderr[i]
+            # plt.fill_between(xs, ys_i-err_i, ys_i+err_i, alpha=0.5)
 
-            std_err = err_i.mean()
+            # std_err = err_i.mean()
             
             # diff2_i = inventory.diff2(ys_i)
             # mu_i = np.median(diff2_i)
@@ -868,7 +859,7 @@ class ExperimentSpectra:
             #     d=d, 
             #     func2_mode=func2_mode)
             self.bs[i,:] = bs
-            # self.y[i,:] = ys_i_smooth
+            # self.ys_bs[i,:] = self.ys[i] - self.bs[i]
     
             plt.plot(xs, bs, linewidth=1.0, color='m', label="baseline")
 
@@ -935,7 +926,7 @@ class ExperimentSpectra:
         
         tau2_slider.on_trait_change(tau2_on_value_change, name="value")
 
-        ys = np.median(self.y, axis=0)
+        ys = np.mean(self.y, axis=0)
         
         @ipywidgets.interact(tau2=tau2_slider, continuous_update=False)
         def _plot_select_spectra_param(tau2):
@@ -1087,11 +1078,11 @@ class ExperimentSpectra:
                 plt.plot(xs, ys, linewidth=0.5, alpha=0.25)
 
             ys_i = self.y[i]
-            err_i = self.stderr[i]
-            plt.fill_between(xs, ys_i-2*err_i, ys_i+2*err_i, alpha=0.5)
+            # err_i = self.stderr[i]
+            # plt.fill_between(xs, ys_i-2*err_i, ys_i+2*err_i, alpha=0.5)
             plt.plot(xs, ys_i, linewidth=1.5, color='DarkBlue', label="original")
 
-            std_err_i = err_i.mean()
+            # std_err_i = err_i.mean()
 
             diff2_i = inventory.diff2(ys_i)
             mu_i = inventory.robust_mean_1d(diff2_i, 3.0)
@@ -1102,7 +1093,7 @@ class ExperimentSpectra:
             ys_i_smooth = ys_i
             plt.plot(xs, ys_i_smooth, linewidth=1.5, color='DarkRed', 
                      # marker='s', markersize=2,
-                     label=fr"smoothed ($\sigma={std_err_i:.3f}$)")
+                     label=fr"smoothed") # ($\sigma={std_err_i:.3f}$)")
 
             x_min, x_max = xrange
             ys_range = ys_i[(x_min <= xs) & (xs <= x_max)]
@@ -1180,15 +1171,54 @@ class SpectraCollection:
             if sp.attrs[name] == val:
                 yield sp.y
     #
-    def save(self, root):
+    def save(self, root, tag):
+        import os
+        root_tag = f"{root}/{tag}"
+        if not os.path.exists(root_tag):
+            os.makedirs(root_tag)
         for key, sp in self.spectra.items():
-            xy = np.vstack((self.x, self.y),)
-            np.savefile(f"{root}/{key}.txt",  xy.T)
+            file_path = f"{root_tag}/{key}.txt"
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            with open(file_path, "wt") as f:
+                for name, val in sp.attrs.items():
+                    f.write(f"#{name}: {val}\n")
+                f.write(f"#data: {len(sp.x)} {len(sp.y)}\n")
+                xy = np.vstack((sp.x, sp.y),)
+                np.savetxt(f, xy.T, fmt="%.3e")
+                f.write("\n")
     #
-    # def load(self, root):
-    #     for fname in os.listdir(root):
-    #         if not fname.endswith(".txt"):
-    #             continue
-    #         xy = np.loadtxt(f"{root}/{fname}")
-            
-            
+    def load(self, root, tag):
+        import os
+        root_tag = f"{root}/{tag}"
+        for fname in os.listdir(root_tag):
+            file_path = f"{root_tag}/{fname}"
+            if not fname.endswith(".txt"):
+                continue
+            with open(file_path, "rt") as f:
+                attrs = {}
+                while 1:
+                    line = f.readline()
+                    line = line.strip()
+                    if not line.startswith("#"):
+                        raise TypeError("Comment line start with #")
+                    name, val = line[1:].split(":")
+                    name = name.strip()
+                    val = val.strip()
+                    if name == "data":
+                        n_row, n_col = tuple(int(x) for x in val.split(' '))
+                        break
+                    attrs[name] = val
+                xy = np.loadtxt(f)
+                # xy = xy.reshape(n_row, n_col)
+                print(xy.shape)
+                x = xy[:,0]
+                y = xy[:,1:].T
+                x = np.ascontiguousarray(x)
+                y = np.ascontiguousarray(y)
+                attrs["source"] = file_path
+                key = fname[:-4]
+                attrs["key"] = key
+                sp = ExperimentSpectra(x, y, attrs)
+                sp.key = key
+                self[key] = sp
