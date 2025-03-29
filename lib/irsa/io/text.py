@@ -49,7 +49,7 @@ def parse_file_name(fname, attr_names):
 #     "SpectraAttrs", 
 #     "date cls subcls resistance n_cycle n_try n_retry concentration wave_length laser_intensity series comment")
 
-def read_spectras_attrs(dirname):
+def read_spectra_attrs(dirname):
     ret = {}
     for line in open(f"{dirname}/attrs.txt", "rt"):
         if line[0] == "\ufeff":
@@ -79,7 +79,7 @@ def read_spectras_attrs(dirname):
 
     return ret
 
-def load_txt_spectras(path, delimiter="\t"):  
+def load_txt_spectra(path, delimiter="\t"):  
     
     xy = np.loadtxt(path, delimiter=delimiter)
 
@@ -107,7 +107,7 @@ def load_txt_dir(path, delimiter="\t"):
     fnames.sort()
     for fname in fnames:
 
-        x, ys = load_txt_spectras(f"{path}/{fname}", delimiter=delimiter)
+        x, ys = load_txt_spectra(f"{path}/{fname}", delimiter=delimiter)
 
         # xy = np.loadtxt(f"{path}/{fname}", delimiter=delimiter)
 
@@ -127,7 +127,7 @@ def load_txt_dir(path, delimiter="\t"):
         
     return Xs, Ys
 
-def load_spectras(root, options, clear=True):
+def load_spectra(root, options, clear=True):
     import os
 
     # if clear:
@@ -141,7 +141,7 @@ def load_spectras(root, options, clear=True):
         # print(dirname)
         dirpath = f"{root}/{dirname}"
     
-        ret = load_experiment_spectras_all(dirpath, options)
+        ret = load_experiment_spectra_all(dirpath, options)
 
         for key in ret:
             dd[key] = ret[key]
@@ -149,7 +149,7 @@ def load_spectras(root, options, clear=True):
     
     return dd
 
-def load_experiment_spectras_all(root, options=None):
+def load_experiment_spectra_all(root, options=None):
     dd = {}
     for entry in os.scandir(root):
         if not entry.is_dir():
@@ -159,22 +159,22 @@ def load_experiment_spectras_all(root, options=None):
         # print("\t", dirname)
         dirpath = f"{root}/{dirname}"
 
-        spectras = load_experiment_spectras(dirpath, options)
-        if spectras is None:
+        spectra = load_experiment_spectra(dirpath, options)
+        if spectra is None:
             continue
 
-        attrs = spectras.attrs
+        attrs = spectra.attrs
         attr_names = _default_keys
         key = "_".join(
             attrs[k] for k in attr_names)
-        dd[key] = spectras
-        spectras.attrs["key"] = key
-        spectras.attrs["source"] = root
+        dd[key] = spectra
+        spectra.attrs["key"] = key
+        spectra.attrs["source"] = root
 
     return SpectraCollection(dd)
 
-def load_experiment_spectras(dirpath, options=None):
-    attrs = read_spectras_attrs(dirpath)
+def load_experiment_spectra(dirpath, options=None):
+    attrs = read_spectra_attrs(dirpath)
 
     is_ok = True
     if options:
@@ -226,7 +226,7 @@ def collect_experiment_attrs(root, attrs):
         # print("\t", dirname)
         dirpath = f"{root}/{dirname}"
 
-        ret = read_spectras_attrs(dirpath)
+        ret = read_spectra_attrs(dirpath)
         for key,val in ret.items():
             # print(key, val)
             vals = attrs.setdefault(key, set())

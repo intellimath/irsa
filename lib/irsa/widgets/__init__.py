@@ -1,3 +1,3 @@
 #
 
-from .loads import load_spectras
+from .loads import load_spectra

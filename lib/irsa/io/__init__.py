@@ -2,4 +2,4 @@
 #
 #
 
-from .text import load_spectras, collect_attr_values
+from .text import load_spectra, collect_attr_values
