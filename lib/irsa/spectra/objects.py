@@ -1119,11 +1119,9 @@ class ExperimentSpectra:
         import ipywidgets
         from IPython.display import display
         
-        ys_mean = self.y.mean(axis=0)
-        ys_m = np.median(ys_mean)
         N = len(self.y)
         fp = ipywidgets.FloatProgress(min=0, max=N, value=0, bar_style="success", description=self.key)
-        fp.style.width = 16
+        fp.style.width = 50
         display(fp)
         for i, ys_i in enumerate(self.y):
             
@@ -1135,7 +1133,7 @@ class ExperimentSpectra:
                 # func1=func1,
                 func2=func2,
                 # tau1=self.tau1_values[i], 
-                tau2=tau2s[j], 
+                tau2=self.tau2s[j], 
                 tau_z=tau_z,
                 d=d, 
                 func2_mode=func2_mode)    
