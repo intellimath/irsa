@@ -532,7 +532,7 @@ class ExperimentSpectra:
             self.ensure_xs()
             self.x = self.x[0]
         self.tau2_values = np.zeros_like(self.x)
-        self.tau2_mean = 0
+        self.tau2s = None
         self.bs = np.zeros_like(y)
         self.ys_bs = np.zeros_like(y)
         self.ys_sm = y.copy()
@@ -959,18 +959,18 @@ class ExperimentSpectra:
         xs = self.x
 
         if override_tau2 or not self.tau2s:
-            self.tau2s = 3*[tau2]
+            self.tau2s = 3*[tau2]            
         
         tau2_min_slider = ipywidgets.FloatSlider(value=self.tau2s[0], 
                                                  min=self.tau2s[0]/50, 
                                                  max=self.tau2s[0]*25, 
                                                  step=self.tau2s[0]/100)
         tau2_min_slider.layout.width="80%"   
-        tau2_50_slider = ipywidgets.FloatSlider(value=self.tau2s[1], 
+        tau2_mean_slider = ipywidgets.FloatSlider(value=self.tau2s[1], 
                                                 min=self.tau2s[1]/50, 
                                                 max=self.tau2s[1]*25, 
                                                 step=self.tau2s[1]/100)
-        tau2_50_slider.layout.width="80%"   
+        tau2_mean_slider.layout.width="80%"   
         tau2_max_slider = ipywidgets.FloatSlider(value=self.tau2s[2], 
                                                  min=self.tau2s[2]/50, 
                                                  max=self.tau2s[2]*25, 
@@ -979,20 +979,20 @@ class ExperimentSpectra:
 
         def tau2_min_on_value_change(change):
             self.tau2s[0] = tau2_min_slider.value
-        def tau2_50_on_value_change(change):
-            self.tau2s[1] = tau2_50_slider.value
+        def tau2_mean_on_value_change(change):
+            self.tau2s[1] = tau2_mean_slider.value
         def tau2_max_on_value_change(change):
             self.tau2s[2] = tau2_max_slider.value
         
         tau2_min_slider.on_trait_change(tau2_min_on_value_change, name="value")
         tau2_max_slider.on_trait_change(tau2_max_on_value_change, name="value")
-        tau2_50_slider.on_trait_change(tau2_50_on_value_change, name="value")
+        tau2_mean_slider.on_trait_change(tau2_mean_on_value_change, name="value")
 
         ys_max = np.max(self.y, axis=0)
-        ys_50 = np.mean(self.y, axis=0)
+        ys_mean = np.mean(self.y, axis=0)
         ys_min = np.min(self.y, axis=0)
         
-        Ys = [ys_min, ys_50, ys_max]
+        self.Ys = np.vstack((ys_min, ys_mean, ys_max))
         labels = ["min", "mean", "max"]
         
         W2 = np.full(len(ys_max), 10.0, "d")
@@ -1001,7 +1001,7 @@ class ExperimentSpectra:
                 W2[(xs >= xa) & (xs <= xb)] = beta
                 
         Ys_smooth = []
-        for ys in Ys:
+        for ys in self.Ys:
             ys_smooth = smooth.whittaker_smooth(
                 ys, tau2=tau2_smooth, 
                 W2=W2, 
@@ -1013,10 +1013,10 @@ class ExperimentSpectra:
 #             func = funcs.Step(sigma)        
                 
         @ipywidgets.interact(tau2_max=tau2_max_slider, 
-                             tau2_50=tau2_50_slider, 
+                             tau2_mean=tau2_mean_slider, 
                              tau2_min=tau2_min_slider, 
                              continuous_update=False)
-        def _plot_select_baseline_param(tau2_max, tau2_50, tau2_min):
+        def _plot_select_baseline_param(tau2_max, tau2_mean, tau2_min):
             fig = plt.figure("select_baseline_param", figsize=(12,4.5))
             fig.canvas.header_visible = False
             fig.canvas.footer_visible = False
@@ -1024,8 +1024,9 @@ class ExperimentSpectra:
             fig.clear()
             plt.title(self.key, fontdict={"size":10}, loc="left")
             xs = self.x
+            colors=["DarkRed", "DarkGreen", "DarkBlue"]
             for i in range(3):
-                plt.plot(xs, Ys[i], linewidth=1.0, color='k', label=labels[i])
+                plt.plot(xs, self.Ys[i], linewidth=1.0, color=colors[i], label=labels[i])
             
             Bs = []
             for i, ys_smooth in enumerate(Ys_smooth):
@@ -1043,8 +1044,12 @@ class ExperimentSpectra:
     
     
             for i in range(3):
-                plt.plot(xs, Bs[i], linewidth=1.0, color='m', label=f"baseline {labels[i]}")                
-                plt.plot(xs, Ys[i]-Bs[i], linewidth=0.75, color='b', label=f"corrected {labels[i]}")
+                if i == 0:
+                    plt.plot(xs, Bs[i], linewidth=1.0, color='m', label="baseline")                
+                    plt.plot(xs, self.Ys[i]-Bs[i], linewidth=0.75, color='Grey', label="corrected")
+                else:
+                    plt.plot(xs, Bs[i], linewidth=1.0, color='m')
+                    plt.plot(xs, self.Ys[i]-Bs[i], linewidth=0.75, color='Grey')
             
             self.Bs = Bs
                         
@@ -1121,9 +1126,8 @@ class ExperimentSpectra:
         fp.style.width = 16
         display(fp)
         for i, ys_i in enumerate(self.y):
-            ys_m_i = np.median(ys_i)
-            c = ys_m_i / ys_m
-            tau2_i = self.tau2_mean
+            
+            j = abs(self.Ys - ys_i).sum(axis=1).argmin()
 
             bs, _ = smooth.whittaker_smooth_weight_func2(
                 ys_i, 
@@ -1131,7 +1135,7 @@ class ExperimentSpectra:
                 # func1=func1,
                 func2=func2,
                 # tau1=self.tau1_values[i], 
-                tau2=tau2_i, 
+                tau2=tau2s[j], 
                 tau_z=tau_z,
                 d=d, 
                 func2_mode=func2_mode)    
