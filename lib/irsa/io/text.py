@@ -2,7 +2,7 @@ import os
 import numpy as np
 from datetime import date
 from irsa.preprocess import utils
-from irsa.spectra import ExperimentSpectraSeries, ExperimentSpectra, SpectraCollection
+from irsa.spectra import SpectraSeries, Spectra, SpectraCollection
 # from recordclass import make_dataclass
 
 _default_keys = [
@@ -83,9 +83,8 @@ def read_spectra_attrs(dirname):
 
     return ret
 
-def load_txt_spectra(path, delimiter="\t"):  
-    
-    xy = np.loadtxt(path, delimiter=delimiter)
+def load_txt_spectra(path, delimiter="\t", skiprows=0):  
+    xy = np.loadtxt(path, delimiter=delimiter, skiprows=skiprows)
 
     x = xy[:,0]
     ys = xy[:,1:]
@@ -99,7 +98,7 @@ def load_txt_spectra(path, delimiter="\t"):
 
     return x, ys
 
-def load_txt_dir(path, delimiter="\t"):
+def load_txt_dir(path, delimiter="\t", skiprows=0):
     """
     """
     import os
@@ -111,7 +110,7 @@ def load_txt_dir(path, delimiter="\t"):
     fnames.sort()
     for fname in fnames:
 
-        x, ys = load_txt_spectra(f"{path}/{fname}", delimiter=delimiter)
+        x, ys = load_txt_spectra(f"{path}/{fname}", delimiter=delimiter, skiprows=skiprows)
 
         # xy = np.loadtxt(f"{path}/{fname}", delimiter=delimiter)
 
@@ -131,7 +130,7 @@ def load_txt_dir(path, delimiter="\t"):
         
     return Xs, Ys
 
-def load_spectra(root, options, clear=True):
+def load_spectra(root, options, clear=True, skiprows=0):
     import os
 
     # if clear:
@@ -145,7 +144,7 @@ def load_spectra(root, options, clear=True):
         # print(dirname)
         dirpath = f"{root}/{dirname}"
     
-        ret = load_experiment_spectra_all(dirpath, options)
+        ret = load_experiment_spectra_all(dirpath, options, skiprows=skiprows)
 
         for key in ret:
             dd[key] = ret[key]
@@ -153,7 +152,7 @@ def load_spectra(root, options, clear=True):
     
     return dd
 
-def load_experiment_spectra_all(root, options=None):
+def load_experiment_spectra_all(root, options=None, skiprows=0):
     dd = {}
     for entry in os.scandir(root):
         if not entry.is_dir():
@@ -163,21 +162,21 @@ def load_experiment_spectra_all(root, options=None):
         # print("\t", dirname)
         dirpath = f"{root}/{dirname}"
 
-        spectra = load_experiment_spectra(dirpath, options)
+        spectra = load_experiment_spectra(dirpath, options, skiprows=skiprows)
         if spectra is None:
             continue
 
         attrs = spectra.attrs
         attr_names = _default_keys
         key = "_".join(
-            attrs[k] for k in attr_names)
+            attrs[k] for k in attr_names if k in attrs)
         dd[key] = spectra
         spectra.attrs["key"] = key
         spectra.attrs["source"] = root
 
     return SpectraCollection(dd)
 
-def load_experiment_spectra(dirpath, options=None):
+def load_experiment_spectra(dirpath, options=None, skiprows=0):
     attrs = read_spectra_attrs(dirpath)
 
     is_ok = True
@@ -189,20 +188,20 @@ def load_experiment_spectra(dirpath, options=None):
     if not is_ok:
         return None
     
-    Xs, Ys = load_txt_dir(dirpath)
+    Xs, Ys = load_txt_dir(dirpath, skiprows=skiprows)
     # print(len(Xs), len(Ys))
     print(dirpath)
-    print(os.path.split(dirpath)[-1], Xs[0].shape, Ys[0].shape, {k:v for k,v in attrs.items() if k in options})
+    # print(os.path.split(dirpath)[-1], Xs[0].shape, Ys[0].shape, {k:v for k,v in attrs.items() if k in options})
 
     mesure_type = attrs["тип_измерения_спектров"]
 
     if mesure_type == "SE":
         if len(Ys[0].shape) > 1:
-            return ExperimentSpectraSeries(Xs, Ys, attrs)
+            return SpectraSeries(Xs, Ys, attrs)
         else:
-            return ExperimentSpectra(Xs, Ys, attrs)
+            return Spectra(Xs, Ys, attrs)
     elif mesure_type == "SS":
-            return ExperimentSpectraSeries(Xs, Ys, attrs)
+            return SpectraSeries(Xs, Ys, attrs)
 
 def collect_attr_values(root):
     attrs = {}

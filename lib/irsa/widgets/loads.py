@@ -11,7 +11,7 @@ import irsa.io as io
 
 # _cached_attrs = None
 
-def load_spectra(path, dd, options, keys=io.text._default_keys, attrs=None, clear=True):
+def load_spectra(path, dd, options, keys=io.text._default_keys, attrs=None, clear=True, skiprows=0):
 
     if clear:
         dd.clear()    
@@ -44,7 +44,7 @@ def load_spectra(path, dd, options, keys=io.text._default_keys, attrs=None, clea
         for key,sel in selector_dict.items():
             if sel.value:
                 options[key] = sel.value
-        dd.update(io.load_spectra(path, options, clear=clear))
+        dd.update(io.load_spectra(path, options, clear=clear, skiprows=skiprows))
         # with output:
         #     print(options)
         #     print(list(dd.keys()))
