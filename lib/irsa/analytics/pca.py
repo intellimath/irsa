@@ -24,11 +24,9 @@ def scale_max(x):
     else:
         return 1.1*x
 
-
-
-def find_robust_loc_and_pc(X, *, n=2, kind="WM", alpha=0.99, normalize_S=False):
+def find_robust_loc_and_pc(X, *, m=2, kind="WM", alpha=0.99, normalize_S=False):
     wma = averaging_function(kind, kwds={"alpha": alpha})
-    c, A, L = pca.find_robust_loc_and_pc(X, wma, n=n)
+    c, A, L = pca.find_robust_loc_and_pc(X, wma, m=m)
     U = (X - c) @ A.T
     S = np.linalg.inv(U.T @ U)
     if normalize_S:
@@ -36,7 +34,7 @@ def find_robust_loc_and_pc(X, *, n=2, kind="WM", alpha=0.99, normalize_S=False):
 
     D2 = dist2(S, U)
     D2_alpha = wma.evaluate(D2)
-    # d2_alpha = 1 - chi2.cdf(D2, n)
+    # d2_alpha = 1 - chi2.cdf(D2, m)
     # print(d2_alpha)
     n_outl = (D2 > D2_alpha).sum()
     print("outliers:", n_outl)
@@ -55,62 +53,56 @@ def find_robust_loc_and_pc(X, *, n=2, kind="WM", alpha=0.99, normalize_S=False):
     
     return c, A, L, U, S, d_max
 
-def find_loc_and_pc(X, *, n=2, alpha=0.99, normalize_S=False, ss=False):
+def find_loc_and_pc(X, m=2, *, alpha=0.9, normalize_S=False, ss=False, verbose=True):
     if ss:
-        c0, A, _ = pca.find_loc_and_pc_ss(X, n=n)
+        c, As, Ls = pca.find_loc_and_pc_ss(X, m=m)
     else:
-        c0, A0, _ = pca.find_loc_and_pc(X, n=n)
-    U0 = (X - c0) @ A0.T
-    # S0 = np.linalg.inv(U0.T @ U0)
-    # if normalize_S:
-    #     S0 /= np.sqrt(np.linalg.det(S0))
+        c, As, Ls = pca.find_loc_and_pc(X, m=m)
 
-    if ss:
-        c, A, L = pca.find_loc_and_pc_ss(U0, n=n)
-    else:
-        c, A, L = pca.find_loc_and_pc(U0, n=n)
-    U = (U0 - c) @ A.T
+    U = (X - c) @ As.T
     S = np.linalg.inv(U.T @ U)
     if normalize_S:
         S /= np.sqrt(np.linalg.det(S))
 
-    D2 = dist2(S, U)
-    d2_alpha = 1 - chi2.cdf(D2, n)
-    print(d2_alpha)
-    n_outl = (d2_alpha > alpha).sum()
-    print("outliers:", n_outl)
-    
-    mask = d2_alpha <= alpha
-    # X2 = np.ascontiguousarray(X[mask])
+    D = dist(S, U)
+    # d2_alpha = 1-chi2.cdf(D2, m)
+    n_outl = (D > alpha).sum()
+    if verbose:
+        print(D)
+        print("outliers:", n_outl)
 
-    # if ss:
-    #     c2, A2, L2 = find_loc_and_pc_ss(X2, n)
-    # else:
-    #     c2, A2, L2 = find_loc_and_pc(X2, n)
-    # U2 = (X2 - c2) @ A2.T
-    # S2 = np.linalg.inv(U2.T @ U2)
-    # if normalize_S:
-    #     S2 /= np.sqrt(np.linalg.det(S2))
-    
-    D = np.sqrt(D2)
-    d_max = D[mask].max()
+    if n_outl == 0:
+        return c, As, Ls, S
+    else:
+        mask = (D <= alpha)
 
-    return c, A, L, U, S, d_max
+        X2 = np.ascontiguousarray(X[mask])
+
+        if ss:
+            c2, As2, Ls2 = pca.find_loc_and_pc_ss(X2, m=m)
+        else:
+            c2, As2, Ls2 = pca.find_loc_and_pc(X2, m=m)
+        U2 = (X2 - c2) @ As2.T
+        S2 = np.linalg.inv(U2.T @ U2)
+        if normalize_S:
+            S2 /= np.sqrt(np.linalg.det(S2))
+
+        return c2, As2, Ls2, S2
 
 def project_on_pc(X1, X2, alpha=0.99):
-    c1, A1 = find_loc_and_pc(X1, alpha=alpha)
+    c1, A1 = find_loc_and_pc(X1, alpha=alp>a)
     U1 = (X1 - c1) @ A1.T
     U2 = (X2 - c1) @ A1.T
     return U1, U2
 
 def pca_compare_symmetrical(X1, X2, label1, label2, alpha=0.9999, normalize_S=False, ss=False):
 
-    c1, A1, d1_alpha = find_loc_and_pc(X1, n=2, alpha=alpha, normalize_S=normalize_S, ss=ss)
+    c1, A1, d1_alpha = find_loc_and_pc(X1, m=2, alpha=alpha, normalize_S=normalize_S, ss=ss)
     U1 = (X1 - c1) @ A1.T
     S1 = np.linalg.inv(U1.T @ U1)
     S1 /= np.sqrt(np.linalg.det(S1))
 
-    c2, A2, d2_alpha = sfind_loc_and_pc(X2, n=2, alpha=alpha, normalize_S=normalize_S, ss=ss)
+    c2, A2, d2_alpha = sfind_loc_and_pc(X2, m=2, alpha=alpha, normalize_S=normalize_S, ss=ss)
     U2 = (X2 - c2) @ A2.T
     S2 = np.linalg.inv(U2.T @ U2)
     S2 /= np.sqrt(np.linalg.det(S2))
@@ -181,14 +173,14 @@ def pca_compare_symmetrical(X1, X2, label1, label2, alpha=0.9999, normalize_S=Fa
 
 def pca_compare(X1, X2, label1, label2, alpha=0.975, normalize_S=False, ss=False):
 
-    c1, A1, S1, d1_alpha = find_loc_and_pc(X1, n=2, alpha=alpha, normalize_S=normalize_S, ss=ss)
+    c1, A1, S1, d1_alpha = find_loc_and_pc(X1, m=2, alpha=alpha, normalize_S=normalize_S, ss=ss)
     U1 = (X1 - c1) @ A1.T
     # S1 = np.linalg.inv(U1.T @ U1)
     if normalize_S:
         S1 /= np.sqrt(np.linalg.det(S1))
 
     U2 = (X2 - c1) @ A1.T
-    c2, A2, S2, d2_alpha = find_loc_and_pc(U2, n=2, alpha=alpha, ss=ss)
+    c2, A2, S2, d2_alpha = find_loc_and_pc(U2, m=2, alpha=alpha, ss=ss)
     UU2 = (U2 - c2) @ A2.T
     # S2 = np.linalg.inv(UU2.T @ UU2)
     if normalize_S:
@@ -259,14 +251,14 @@ def pca_compare(X1, X2, label1, label2, alpha=0.975, normalize_S=False, ss=False
     
 def pca_robust_compare(X1, X2, label1, label2, alpha=0.975, normalize_S=False, ss=False):
 
-    c1, A1, d1_alpha = find_robust_loc_and_pc(X1, n=2, alpha=alpha, normalize_S=normalize_S)
+    c1, A1, d1_alpha = find_robust_loc_and_pc(X1, m=2, alpha=alpha, normalize_S=normalize_S)
     U1 = (X1 - c1) @ A1.T
     S1 = np.linalg.inv(U1.T @ U1)
     if normalize_S:
         S1 /= np.sqrt(np.linalg.det(S1))
 
     U2 = (X2 - c1) @ A1.T
-    c2, A2, d2_alpha = find_robust_loc_and_pc(U2, n=2, alpha=alpha, normalize_S=normalize_S)
+    c2, A2, d2_alpha = find_robust_loc_and_pc(U2, m=2, alpha=alpha, normalize_S=normalize_S)
     UU2 = (U2 - c2) @ A2.T
     S2 = np.linalg.inv(UU2.T @ UU2)
     if normalize_S:

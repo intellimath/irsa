@@ -11,7 +11,7 @@ _default_keys = [
     'резистентность', 'отсечки_по_молекулярной_массе',
     'номер_цикла', 'номер_эксперимента_в_цикле', 
     'номер_повтора', 'тип_измерения_спектров',
-    'начальная_концентрация_клеток_в_пробе', 
+    'начальная_концентрация_клеток_в_пробе', 'номер_подложки',
     'капля', 'вода', 'отмывка_фильтров',
     "комментарий"]
 
@@ -150,7 +150,7 @@ def load_spectra(root, options, clear=True, skiprows=0):
             dd[key] = ret[key]
         # dd.update(ret)
     
-    return dd
+    return SpectraCollection(dd)
 
 def load_experiment_spectra_all(root, options=None, skiprows=0):
     dd = {}
@@ -196,6 +196,7 @@ def load_experiment_spectra(dirpath, options=None, skiprows=0):
     mesure_type = attrs["тип_измерения_спектров"]
 
     if mesure_type == "SE":
+        # print(type(Ys[0]))
         if len(Ys[0].shape) > 1:
             return SpectraSeries(Xs, Ys, attrs)
         else:

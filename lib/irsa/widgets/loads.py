@@ -2,6 +2,7 @@ import ipywidgets
 from IPython.display import display
 
 import irsa.io as io
+import irsa.spectra as spectra
 
 # _default_keys = [
 #     'дата', 'вид_бактерий', 'штамм_бактерий', 
@@ -21,7 +22,11 @@ def load_spectra(path, dd, options, keys=io.text._default_keys, attrs=None, clea
     if attrs is None:
         attrs = io.collect_attr_values(path)
     for key in keys:
-        vals = attrs[key]
+        vals = attrs.get(key, [])
+        if not vals:
+            continue
+        if vals and not vals[0]:
+            continue
         n_rows = len(vals)
         if n_rows > 5:
             n_rows = 5
@@ -53,4 +58,4 @@ def load_spectra(path, dd, options, keys=io.text._default_keys, attrs=None, clea
     
     options_widgets = (box, options_button, output)
     display(*options_widgets)
-    return dd
+    return spectra.SpectraCollection(dd)

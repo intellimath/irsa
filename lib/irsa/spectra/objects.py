@@ -3,7 +3,10 @@
 #
 
 import numpy as np
-import rampy 
+import rampy
+
+import matplotlib.pyplot as plt
+import ipywidgets
 
 from irsa.preprocess import utils
 import irsa.analytics as analytics
@@ -68,11 +71,12 @@ class SpectraSeries:
         self.y = y
         self.attrs = attrs
         key = "_".join(
-            (attrs[k] if attrs[k] != 'no_date' else '_') for k in _attr_names)
+            (attrs[k] if attrs[k] != 'no_date' else '_') for k in _attr_names if k in attrs)
         self.key = key
         self.excludes = []
         self.tau2s = None
         self.bs = None
+        self.windows = []
     #
     def __getitem__(self, i):
         sp = Spectra(self.x[i], self.y[i], self.attrs)
@@ -438,7 +442,7 @@ class SpectraSeries:
                 Ys[k] = np.ascontiguousarray(Ys[k][start_index:end_index,:])
         self.y = Ys
     #
-    def allign_bottom(self):
+    def align_bottom(self):
         Ys = self.y
         for k in range(len(Ys)):
             ys = Ys[k]
@@ -599,6 +603,7 @@ class Spectra:
         if len(x.shape) > 1:
             self.ensure_xs()
             self.x = self.x[0]
+        self.excludes = []
         self.tau2_values = np.zeros_like(self.x)
         self.tau2s = None
         self.bs = np.zeros_like(self.y)
@@ -652,12 +657,80 @@ class Spectra:
     #         # ys /= np.mean(ys)
     #         ys *= len
     # #
+    def select_for_exclusion(self, clear=False):
+
+        N = len(self.y)
+        if self.excludes and clear:
+            self.excludes = []
+
+        i_slider = ipywidgets.IntSlider(value=0, min=0, max=len(self.y)-1)
+        i_slider.layout.width="50%"
+
+        b_exclude = ipywidgets.Checkbox(value=(i_slider.value in self.excludes))
+
+        button = ipywidgets.Button(description="Exclude selected")
+        def button_click(_):
+            self.exclude_selected()
+        button.on_click(button_click)
+        display(button)
+
+        def i_on_value_change(change):
+            i = i_slider.value
+            b_exclude.value = (i in self.excludes)
+
+        def b_on_value_change(change):
+            i = i_slider.value
+            if b_exclude.value:
+                if i not in self.excludes:
+                    self.excludes.append(i)
+            else:
+                if i in self.excludes:
+                    self.excludes.remove(i)
+
+        i_slider.on_trait_change(i_on_value_change, name="value")
+        b_exclude.on_trait_change(b_on_value_change, name="value")
+
+        @ipywidgets.interact(i=i_slider, exclude=b_exclude, continuous_update=False)
+        def _plot_select_for_exclusion(i, exclude):
+            fig = plt.figure("_select_for_exclusion", figsize=(10,4))
+            fig.clear()
+            fig.canvas.header_visible = False
+            fig.canvas.footer_visible = False
+            fig.canvas.toolbar_position = 'right'
+            plt.title(f"{self.key} ({len(self.y[i])} spectra)", fontdict={"size":10}, loc="left")
+            xs = self.x
+            Ys = self.y
+            for ys in Ys:
+                plt.plot(xs, ys, linewidth=0.5, alpha=0.25)
+
+            plt.plot(xs, Ys[i], linewidth=1.0, color='DarkRed', label=f"current: {i}")
+
+            plt.minorticks_on()
+            plt.tight_layout()
+            plt.legend()
+            plt.show()
+    #
+    def exclude_selected(self):
+        if not self.excludes:
+            return
+
+        N = len(self.y)
+
+        # self.x_excluded = [self.x[i] for i in range(N) if i in self.excludes]
+        self.y_excluded = [self.y[i] for i in range(N) if i in self.excludes]
+        self.i_excluded = self.excludes
+
+        # self.x = [self.x[i] for i in range(N) if i not in self.excludes]
+        self.y = [self.y[i] for i in range(N) if i not in self.excludes]
+
+        self.excludes = []
+    #
     def select_windows(self, windows=None):
         import matplotlib.pyplot as plt
         import ipywidgets
 
         ws_select = ipywidgets.Select(options=[str(w) for w in self.windows], description="windows:")
-        
+
         xrange_slider = ipywidgets.IntRangeSlider(
             value=(min(self.x), max(self.x)), 
             min=min(self.x), 
@@ -672,7 +745,7 @@ class Spectra:
         #     ws.options = [str(w) for w in self.windows]
 
         b_include = ipywidgets.Checkbox(value=False)
-        
+
         # def i_on_value_change(change):
         #     i = i_slider.value
         #     b_exclude.value = self.excludes[i]
@@ -686,16 +759,16 @@ class Spectra:
                 b_include.value = False
             # else:
             #     self.windows.remove(xrange_value)
-        
+
         # xrange_slider.on_trait_change(i_on_value_change, name="value")
         b_include.on_trait_change(b_on_value_change, name="value")
 
         @ipywidgets.interact(xrange=xrange_slider, ws=ws_select, b=b_include, continuous_update=False)
-        def _plot_select_windows(xrange, ws, b):    
+        def _plot_select_windows(xrange, ws, b):
             fig = plt.figure("_select_windows", figsize=(13,4.5))
             fig.canvas.header_visible = False
             fig.canvas.footer_visible = False
-            fig.canvas.toolbar_position = 'right'            
+            fig.canvas.toolbar_position = 'right'
             fig.clear()
             plt.title(self.key, fontdict={"size":10}, loc="left")
             xs = self.x
@@ -803,13 +876,10 @@ class Spectra:
             for k, y in enumerate(self.y):
                 y[:] = smooth.whittaker_smooth(y, W2=W2, tau2=tau, d=2)
     #
-    def select_baselines(self, tau2=1000.0, tau1=0.0, tau_z=0, tau2_smooth=10.0, override_tau2=False,
+    def select_baselines(self, tau2=1000.0, tau1=0.0, tau_z=0, tau2_smooth=1.0, override_tau2=True,
                          bs_scale=3.0, alpha=0.001, eps=0.001, beta=1.0e2,
-                         func=None, func1=None, func2=None, w_tau2=1.0,                         
-                         d=2, func2_mode="d", **kwargs):
-        
-        import matplotlib.pyplot as plt
-        import ipywidgets
+                         func=None, func2=None, func2_e=None, w_tau2=1.0,
+                         d=2, **kwargs):
 
         N = len(self.y)
 
@@ -822,9 +892,9 @@ class Spectra:
             mask = (self.tau2_values == 0)
             if mask.sum() > 0:
                 self.tau2_values[mask] = tau2
-        
+
         # self.tau1_values = N * [tau1]
-                
+
         i_slider = ipywidgets.IntSlider(min=0, max=len(self.y)-1)
         i_slider.layout.width="50%"
 
@@ -858,24 +928,30 @@ class Spectra:
             # ys = self.y[i]
             # ys = ys[self.x >= xmin & self.x <= xmax]
             # plt.ylim(0.9*min(ys), 1.1*max(ys))
-        
+
         tau2_slider.on_trait_change(tau2_on_value_change, name="value")
         # tau1_slider.on_trait_change(tau1_on_value_change, name="value")
         i_slider.on_trait_change(i_on_value_change, name="value")
-                
+
         xrange_slider = ipywidgets.FloatRangeSlider(
             value=(min(self.x), max(self.x)), 
             min=min(self.x), 
             max=max(self.x))
         xrange_slider.layout.width="80%"
-        
+
+        button = ipywidgets.Button(description="Subtract baselines")
+        def button_click(_):
+            self.replace_spectra_with_corrected()
+        button.on_click(button_click)
+        display(button)
+
         @ipywidgets.interact(i=i_slider, tau2=tau2_slider, #tau1=tau1_slider, 
                              xrange=xrange_slider, continuous_update=False)
         def _plot_select_baselines(i, tau2, xrange):
-            fig = plt.figure("_select_baselines", figsize=(12,7))
+            fig = plt.figure("_select_baselines", figsize=(13,7))
             fig.canvas.header_visible = False
             fig.canvas.footer_visible = False
-            fig.canvas.toolbar_position = 'right'            
+            fig.canvas.toolbar_position = 'right'
             fig.clear()
             ax1 = plt.subplot(2,1,1)
             plt.title(self.key, fontdict={"size":10}, loc="left")
@@ -885,20 +961,19 @@ class Spectra:
 
             ys_i = self.y[i]
 
-            W2 = np.full(len(self.y[0])-2, 1.0, "d")
+            W2 = np.ones(len(self.y[0]), "d")
             if self.windows is not None:
                 for xa,xb in self.windows:
-                    W2[(xs[1:-1] >= xa) & (xs[1:-1] <= xb)] = beta
+                    W2[(xs >= xa) & (xs <= xb)] = beta
 
             nonlocal func
             ys_i_smooth = smooth.whittaker_smooth(
-                    ys_i, 
-                    tau2=tau2_smooth,
+                    ys_i, tau2=tau2_smooth,
                     # W=W,
-                    W2=W2, 
-                    d=2) 
+                    W2=W2,
+                    d=2)
             sigma = (ys_i - ys_i_smooth).std()
-            
+
             plt.plot(xs, ys_i_smooth, linewidth=1.5, color='DarkGreen', label=f"current smoothed ({i})")
             plt.plot(xs, ys_i, linewidth=1.5, color='DarkBlue', label=f"current ({i})")
 
@@ -908,14 +983,14 @@ class Spectra:
                 ys_i_smooth,
                 func=func,
                 func2=func2,
-                tau2=tau2, 
+                func2_e=func2_e,
+                tau2=tau2,
                 tau_z=tau_z,
-                d=d, 
-                func2_mode=func2_mode)
+                d=d)
 
             self.bs[i,:] = bs
             self.ys_bs[i,:] = self.y[i] - bs
-    
+
             plt.plot(xs, bs, linewidth=1.0, color='m', label="baseline")
 
             x_min, x_max = xrange
@@ -948,12 +1023,12 @@ class Spectra:
             ax1.label_outer()
             ax2.label_outer()
             plt.tight_layout()
-            plt.show()             
+            plt.show()
     #
-    def select_baseline_param(self, 
+    def select_baseline_param(self,
                          tau2=1000.0,
-                         func=None, func2=None,                         
-                         d=2, func2_mode="d",
+                         func=None, func2=None, func2_e=None,
+                         d=2,
                          override_tau2=False, 
                          tau_z=0, tau2_smooth=1.0, beta=100,
                          **kwargs):
@@ -1179,25 +1254,22 @@ class Spectra:
         self.tau2_values.fill(0)
     #
     def plot_spectra(self, smoothing=True, tau2_smooth=1, beta=100, **kwargs):
-        import matplotlib.pyplot as plt
-        import ipywidgets
-        
         i_slider = ipywidgets.IntSlider(min=0, max=len(self.y)-1, description="i")
         i_slider.layout.width="50%"
-                
+
         xrange_slider = ipywidgets.FloatRangeSlider(
             value=(min(self.x), max(self.x)), 
             min=min(self.x), 
             max=max(self.x),
             description="xrange",)
         xrange_slider.layout.width="50%"
-        
+
         @ipywidgets.interact(i=i_slider, xrange=xrange_slider, continuous_update=False)
         def _plot_spectra(i, xrange):
-            fig = plt.figure("_plot_spectra", figsize=(12,4.5))
+            fig = plt.figure("_plot_current_spectra", figsize=(12,4.5))
             fig.canvas.header_visible = False
             fig.canvas.footer_visible = False
-            fig.canvas.toolbar_position = 'right'            
+            fig.canvas.toolbar_position = 'right'
             fig.clear()
             plt.title(self.key, fontdict={"size":10}, loc="left")
             xs = self.x
@@ -1417,18 +1489,18 @@ class Spectra:
             x_max = scale_max(U[:,0].max())
             y_min = scale_min(U[:,1].min())
             y_max = scale_max(U[:,1].max())
-        
+
             # dy = y_max - y_min
             # dx = x_max - x_min
-        
+
             UX, UY = np.meshgrid(
                 np.linspace(x_min, x_max, 100),
-                np.linspace(y_min, y_max, 100))    
-        
+                np.linspace(y_min, y_max, 100))
+
             UXY = np.c_[UX.ravel(), UY.ravel()]
             ZZ = dist(S, UXY)
             # ZZ2 = chi2.cdf(ZZ, 2)
-            
+
             ZZ = ZZ.reshape(UX.shape)
 
             plt.scatter([c[0]], [c[1]], s=144, c="k", marker='+', linewidth=1.0)
@@ -1436,10 +1508,10 @@ class Spectra:
                 print("scatter matrix:\n", S)
             print(alpha)
             levels = [0.01, 0.1]
-            
+
             ct = plt.contour(UX, UY, ZZ, colors="r", linestyles=':', linewidths=0.5, alpha=0.75)
             plt.clabel(ct, fontsize=10)
-                        
+
             plt.minorticks_on()
 
             # xa, xb = xrange
@@ -1447,7 +1519,7 @@ class Spectra:
             # i0, i1 = min(ix_range), max(ix_range)
             # plt.legend()
             plt.tight_layout()
-            plt.show()            
+            plt.show()
     #
 
 class SpectraCollection:
@@ -1457,6 +1529,10 @@ class SpectraCollection:
             self.spectra = {}
         else:
             self.spectra = spectra
+        self.wg_select_key = None
+        self.current_key = None
+
+        self.active_windows = []
     #
     def __getitem__(self, key):
         return self.spectra[key]
@@ -1482,6 +1558,50 @@ class SpectraCollection:
         for sp in self.spectra.values():
             if sp.attrs[name] == val:
                 yield sp.y
+    #
+    def select_key(self):
+        if self.wg_select_key is None:
+            keys = list(self.keys())
+            self.wg_select_key = wg_select = ipywidgets.Dropdown(options=keys, value=keys[0], description="Spectra key:")
+            wg_select.layout.width="50%"
+            self.current_key = keys[0]
+
+            def on_value_change(change):
+                self.current_key = self.wg_select_key.value
+
+            wg_select.on_trait_change(on_value_change, name="value")
+        else:
+            wg_select = self.wg_select_key
+
+        return wg_select
+    #
+    def align_bottom(self):
+        for sp in self.spectra.values():
+            sp.align_bottom()
+    #
+    def crop(self, start_index, end_index=None):
+        for sp in self.spectra.values():
+            sp.crop(start_index, end_index)
+    #
+    def plot_spectra(self):
+        @ipywidgets.interact(key=self.select_key(), continuous_update=False)
+        def _plot_current_spectra(key):
+            sp = self.spectra[key]
+            sp.plot_spectra()
+    #
+    def select_for_exclusion(self):
+        @ipywidgets.interact(key=self.select_key(), continuous_update=False)
+        def _plot_current_spectra(key):
+            sp = self.spectra[key]
+            sp.select_for_exclusion()
+    #
+    def select_baselines(self, tau2=1000.0, tau2_smooth=1.0,
+                         func=funcs.Expit(-10.0), func2=None, func2_e=None,
+                         d=2):
+        @ipywidgets.interact(key=self.select_key(), continuous_update=False)
+        def _select_baselines(key):
+            sp = self.spectra[key]
+            sp.select_baselines(tau2=tau2, tau2_smooth=tau2_smooth, func=func, func2=func2, func2_e=func2_e, d=d)
     #
     def save(self, root, tag):
         import os
