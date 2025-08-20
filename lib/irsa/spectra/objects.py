@@ -50,7 +50,7 @@ def smooth_spectra(xs, ys, tau2=1.0, windows=None, beta=100):
     if windows is not None:
         for xa, xb in windows:
             W2[(xs[1:-1] >= xa) & (xs[1:-1] <= xb)] *= beta
-    
+
     ys_smooth = smooth.whittaker_smooth(ys, tau2=tau2, W2=W2, d=2)
     return ys_smooth
 
@@ -224,7 +224,7 @@ class SpectraSeries:
             min=min(self.x[0]), 
             max=max(self.x[0]))
         xrange_slider.layout.width="90%"
-        
+
         # i_slider.on_trait_change(i_on_value_change, name="value")
 
         @ipywidgets.interact(i=i_slider, xrange=xrange_slider, continuous_update=False)
@@ -237,7 +237,7 @@ class SpectraSeries:
             fig.clear()
 
             Ys = self.y[i]
-            Ys2 = Ys / 100 
+            Ys2 = Ys / 100
 
             nonlocal n_component
             if n_component is None:
@@ -659,7 +659,6 @@ class Spectra:
     # #
     def select_for_exclusion(self, clear=False):
 
-        N = len(self.y)
         if self.excludes and clear:
             self.excludes = []
 
@@ -671,6 +670,7 @@ class Spectra:
         button = ipywidgets.Button(description="Exclude selected")
         def button_click(_):
             self.exclude_selected()
+            i_slider.max = len(self.y)-1
         button.on_click(button_click)
         display(button)
 
@@ -692,7 +692,7 @@ class Spectra:
 
         @ipywidgets.interact(i=i_slider, exclude=b_exclude, continuous_update=False)
         def _plot_select_for_exclusion(i, exclude):
-            fig = plt.figure("_select_for_exclusion", figsize=(10,4))
+            fig = plt.figure("_select_for_exclusion", figsize=(12,5))
             fig.clear()
             fig.canvas.header_visible = False
             fig.canvas.footer_visible = False
@@ -979,8 +979,10 @@ class Spectra:
 
             if func is None:
                 func = funcs.Step(sigma)
+
+            ss = np.median(np.abs(ys_i_smooth))
             bs, dd = smooth.whittaker_smooth_weight_func2(
-                ys_i_smooth,
+                ys_i_smooth / ss,
                 func=func,
                 func2=func2,
                 func2_e=func2_e,
@@ -988,6 +990,7 @@ class Spectra:
                 tau_z=tau_z,
                 d=d)
 
+            bs *= ss
             self.bs[i,:] = bs
             self.ys_bs[i,:] = self.y[i] - bs
 
@@ -1559,6 +1562,13 @@ class SpectraCollection:
             if sp.attrs[name] == val:
                 yield sp.y
     #
+    def union_by_attr_value(self, name, val):
+        sp_list = list(self.select_by_attr_value(name, val))
+        x = sp_list[0].x
+        ys = tuple([sp.y for sp in sp_list])
+        y = np.concatenate(ys, axis=0)
+        return Spectra(x, y, dict(name=val))
+    #
     def select_key(self):
         if self.wg_select_key is None:
             keys = list(self.keys())
@@ -1588,6 +1598,12 @@ class SpectraCollection:
         def _plot_current_spectra(key):
             sp = self.spectra[key]
             sp.plot_spectra()
+    #
+    def plot_pca_spectra(self):
+        @ipywidgets.interact(key=self.select_key(), continuous_update=False)
+        def _plot_current_pca_spectra(key):
+            sp = self.spectra[key]
+            sp.plot_pca_spectra()
     #
     def select_for_exclusion(self):
         @ipywidgets.interact(key=self.select_key(), continuous_update=False)
