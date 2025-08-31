@@ -173,16 +173,16 @@ def pca_compare_symmetrical(X1, X2, label1, label2, alpha=0.9999, normalize_S=Fa
 
 def pca_compare(X1, X2, label1, label2, alpha=0.975, normalize_S=False, ss=False):
 
-    c1, A1, S1, d1_alpha = find_loc_and_pc(X1, m=2, alpha=alpha, normalize_S=normalize_S, ss=ss)
+    c1, A1, L1, S1 = find_loc_and_pc(X1, m=2, alpha=alpha, normalize_S=normalize_S, ss=ss)
     U1 = (X1 - c1) @ A1.T
     # S1 = np.linalg.inv(U1.T @ U1)
-    if normalize_S:
-        S1 /= np.sqrt(np.linalg.det(S1))
+    # if normalize_S:
+    #     S1 /= np.sqrt(np.linalg.det(S1))
 
     U2 = (X2 - c1) @ A1.T
-    c2, A2, S2, d2_alpha = find_loc_and_pc(U2, m=2, alpha=alpha, ss=ss)
+    c2, A2, L2, S2 = find_loc_and_pc(U2, m=2, alpha=alpha, normalize_S=normalize_S, ss=ss)
     UU2 = (U2 - c2) @ A2.T
-    # S2 = np.linalg.inv(UU2.T @ UU2)
+    S2 = np.linalg.inv(UU2.T @ UU2)
     if normalize_S:
         S2 /= np.sqrt(np.linalg.det(S2))
 
@@ -197,7 +197,7 @@ def pca_compare(X1, X2, label1, label2, alpha=0.975, normalize_S=False, ss=False
 
     UX, UY = np.meshgrid(
         np.linspace(x_min, x_max, 100),
-        np.linspace(y_min, y_max, 100))    
+        np.linspace(y_min, y_max, 100))
 
     UXY = np.c_[UX.ravel(), UY.ravel()]
     ZZ1 = dist(S1, UXY)
@@ -235,8 +235,8 @@ def pca_compare(X1, X2, label1, label2, alpha=0.975, normalize_S=False, ss=False
     plt.scatter([0], [0], s=144, c="r", edgecolors="k", linewidth=1.0)
     plt.scatter([c2[0]], [c2[1]], s=144, c="b", edgecolors="k", linewidth=1.0)
     
-    plt.contour(UX, UY, ZZ1, levels=[d1_alpha], colors="r", alpha=0.5)
-    plt.contour(UX, UY, ZZ2, levels=[d2_alpha], colors="b", alpha=0.5)
+    # plt.contour(UX, UY, ZZ1, levels=[d1_alpha], colors="r", alpha=0.5)
+    # plt.contour(UX, UY, ZZ2, levels=[d2_alpha], colors="b", alpha=0.5)
     
     ct1 = plt.contour(UX, UY, ZZ, levels=levels, linewidths=0.5, alpha=0.5)
     plt.clabel(ct1, colors='k')

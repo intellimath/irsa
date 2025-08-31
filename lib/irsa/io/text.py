@@ -209,12 +209,11 @@ def collect_attr_values(root):
     for entry in os.scandir(root):
         if not entry.is_dir():
             continue
-        
+
         dirname = entry.name
-        # print(dirname)
-        dirpath = f"{root}/{dirname}"
-    
-        collect_experiment_attrs(dirpath, attrs)
+        print(dirname)
+
+        collect_experiment_attrs(f"{root}/{dirname}", attrs)
 
         # for key, vals in ret.items():
         #     vals.union( attrs.setdefault(key, set()) )
@@ -225,9 +224,9 @@ def collect_experiment_attrs(root, attrs):
     for entry in os.scandir(root):
         if not entry.is_dir():
             continue
-        
+
         dirname = entry.name
-        # print("\t", dirname)
+        print("\t", dirname)
         dirpath = f"{root}/{dirname}"
 
         ret = read_spectra_attrs(dirpath)
