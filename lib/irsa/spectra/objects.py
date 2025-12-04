@@ -41,10 +41,12 @@ def scale_max(x, alpha=0.01):
         return (1+alpha)*x
 
 def smooth_spectra(xs, ys, tau2=1.0, windows=None, beta=100):
-    ys_smooth = smooth.whittaker_smooth(ys, tau2=tau2, d=2) 
+    ys_smooth = smooth.whittaker_smooth(ys, tau2=tau2, d=2)
 
     ee = ys - ys_smooth
-    ee /= ee.std()
+    ss = ee.std()
+    if ss != 0:
+        ee /= ee.std()
 
     W2 = np.exp(-0.5 * ee * ee)[1:-1]
     if windows is not None:
@@ -1423,6 +1425,7 @@ class Spectra:
 
             plt.plot(xs, Ys[ii], linewidth=1.25, color='k')
             plt.minorticks_on()
+            plt.grid(1)
 
             x_min, x_max = xrange
             plt.xlim(0.99*x_min, 1.01*x_max)
@@ -1433,6 +1436,7 @@ class Spectra:
 
             plt.plot(xs, Ys_p[ii], linewidth=1.25, color='DarkBlue')
             plt.minorticks_on()
+            plt.grid(1)
 
             x_min, x_max = xrange
             plt.xlim(0.99*x_min, 1.01*x_max)
