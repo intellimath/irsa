@@ -15,8 +15,8 @@ import irsa.spectra as spectra
 def load_spectra(path, dd, options, keys=io.text._default_keys, attrs=None, clear=True, skiprows=0):
 
     if clear:
-        dd.clear()    
-    
+        dd.clear()
+
     selector_dict = {}
     selectors = []
     if attrs is None:
@@ -38,13 +38,13 @@ def load_spectra(path, dd, options, keys=io.text._default_keys, attrs=None, clea
         vbox = ipywidgets.VBox((lb,wg))
         selector_dict[key] = wg
         selectors.append(vbox)
-        
+
     box = ipywidgets.Box(selectors)
     box.layout = ipywidgets.Layout(flex_flow="row wrap")
-        
+
     options_button = ipywidgets.Button(description="Select")
     output = ipywidgets.Output()
-    
+
     def onclick_options_button(b, dd=dd, options=options):
         for key,sel in selector_dict.items():
             if sel.value:

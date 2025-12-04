@@ -6,11 +6,11 @@ from irsa.spectra import SpectraSeries, Spectra, SpectraCollection
 # from recordclass import make_dataclass
 
 _default_keys = [
-    'дата', 
-    'вид_бактерий', 'штамм_бактерий', 
+    'дата',
+    'вид_бактерий', 'штамм_бактерий',
     'резистентность', 'отсечки_по_молекулярной_массе',
-    'номер_цикла', 'номер_эксперимента_в_цикле', 
-    'номер_повтора', 'тип_измерения_спектров',
+    'номер_цикла', 'номер_эксперимента_в_цикле',
+    'номер_повтора', 'тип_измерения_спектров', "место",
     'начальная_концентрация_клеток_в_пробе', 'номер_подложки',
     'капля', 'вода', 'отмывка_фильтров',
     "комментарий"]
@@ -83,6 +83,12 @@ def read_spectra_attrs(dirname):
 
     return ret
 
+def write_spectra_attrs(dirname, attrs):
+    fd = open(f"{dirname}/attrs.txt", "wt")
+    for key, val in attrs.items():
+        fd.write(f"{key}: {val}\n")
+    fd.close()
+
 def load_txt_spectra(path, delimiter="\t", skiprows=0):  
     xy = np.loadtxt(path, delimiter=delimiter, skiprows=skiprows)
 
@@ -116,81 +122,126 @@ def load_txt_dir(path, delimiter="\t", skiprows=0):
 
         # x = xy[:,0]
         # ys = xy[:,1:]
-        
+
         # if ys.shape[1] == 1:
         #     ys = np.ascontiguousarray(ys[:,0])
         # elif ys.shape[1] > 1:
         #     ys = np.ascontiguousarray(ys.T)
-        
-        # x = np.ascontiguousarray(x)    
-            
+
+        # x = np.ascontiguousarray(x)
+
         Xs.append(x)
         # Ys.append(np.power(ys, 0.25))
         Ys.append(ys)
-        
+
     return Xs, Ys
 
-def load_spectra(root, options, clear=True, skiprows=0):
-    import os
-
-    # if clear:
-    #     dd.clear()
-    dd = {}
+def iter_dir_with_spectra(root):
+    fnames = os.listdir(root)
+    if "attrs.txt" in fnames or "attr.txt" in fnames:
+        yield root
     for entry in os.scandir(root):
         if not entry.is_dir():
             continue
-        
-        dirname = entry.name
-        # print(dirname)
-        dirpath = f"{root}/{dirname}"
-    
-        ret = load_experiment_spectra_all(dirpath, options, skiprows=skiprows)
+        dirpath = f"{root}/{entry.name}"
+        yield from iter_dir_with_spectra(dirpath)
 
-        for key in ret:
-            dd[key] = ret[key]
-        # dd.update(ret)
-    
-    return SpectraCollection(dd)
+def correct_attrs_with_places(root):
+    list_path = list(iter_dir_with_spectra(root))
+    for dirpath in list_path:
+        print(dirpath)
+        attrs = read_spectra_attrs(dirpath)
+        subdirs = [entry.name for entry in os.scandir(dirpath) if entry.is_dir()]
+        for subdir in subdirs:
+            attrs["место"] = subdir
+            attrs_path = f"{dirpath}/{subdir}"
+            print(f"write attrs to {attrs_path}")
+            write_spectra_attrs(attrs_path, attrs)
+        print(f"remove attrs from {dirpath}")
+        os.remove(f"{dirpath}/attrs.txt")
 
-def load_experiment_spectra_all(root, options=None, skiprows=0):
+def load_spectra(root, options, clear=True, skiprows=0, verbose=True):
     dd = {}
-    for entry in os.scandir(root):
-        if not entry.is_dir():
-            continue
-
-        dirname = entry.name
-        # print("\t", dirname)
-        dirpath = f"{root}/{dirname}"
-
-        spectra = load_experiment_spectra(dirpath, options, skiprows=skiprows)
+    list_path = list(iter_dir_with_spectra(root))
+    for dirpath in list_path:
+        spectra = load_experiment_spectra(dirpath, options, skiprows=skiprows, verbose=verbose)
         if spectra is None:
             continue
 
+        # print(dirpath)
         attrs = spectra.attrs
         attr_names = _default_keys
         key = "_".join(
             attrs[k] for k in attr_names if k in attrs)
         dd[key] = spectra
         spectra.attrs["key"] = key
-        spectra.attrs["source"] = root
+        spectra.attrs["source"] = dirpath
 
     return SpectraCollection(dd)
 
-def load_experiment_spectra(dirpath, options=None, skiprows=0):
+# def load_spectra(root, options, clear=True, skiprows=0):
+#     import os
+
+#     # if clear:
+#     #     dd.clear()
+#     dd = {}
+#     for entry in os.scandir(root):
+#         if not entry.is_dir():
+#             continue
+
+#         dirname = entry.name
+#         # print(dirname)
+#         dirpath = f"{root}/{dirname}"
+
+#         ret = load_experiment_spectra_all(dirpath, options, skiprows=skiprows)
+
+#         for key in ret:
+#             dd[key] = ret[key]
+#         # dd.update(ret)
+
+#     return SpectraCollection(dd)
+
+# def load_experiment_spectra_all(root, options=None, skiprows=0):
+#     dd = {}
+#     for entry in os.scandir(root):
+#         if not entry.is_dir():
+#             continue
+
+#         dirname = entry.name
+#         # print("\t", dirname)
+#         dirpath = f"{root}/{dirname}"
+
+#         spectra = load_experiment_spectra(dirpath, options, skiprows=skiprows)
+#         if spectra is None:
+#             continue
+
+#         attrs = spectra.attrs
+#         attr_names = _default_keys
+#         key = "_".join(
+#             attrs[k] for k in attr_names if k in attrs)
+#         dd[key] = spectra
+#         spectra.attrs["key"] = key
+#         spectra.attrs["source"] = root
+
+#     return SpectraCollection(dd)
+
+def load_experiment_spectra(dirpath, options=None, skiprows=0, verbose=True):
     attrs = read_spectra_attrs(dirpath)
 
     is_ok = True
     if options:
         for key, vals in options.items():
-            if attrs.get(key, None) not in vals:
+            key_val = attrs.get(key, None)
+            if key_val not in vals:
                 is_ok = False
                 break
     if not is_ok:
         return None
-    
+
     Xs, Ys = load_txt_dir(dirpath, skiprows=skiprows)
     # print(len(Xs), len(Ys))
-    print(dirpath)
+    if verbose:
+        print("ok:", dirpath)
     # print(os.path.split(dirpath)[-1], Xs[0].shape, Ys[0].shape, {k:v for k,v in attrs.items() if k in options})
 
     mesure_type = attrs["тип_измерения_спектров"]
@@ -206,32 +257,40 @@ def load_experiment_spectra(dirpath, options=None, skiprows=0):
 
 def collect_attr_values(root):
     attrs = {}
-    for entry in os.scandir(root):
-        if not entry.is_dir():
-            continue
-
-        dirname = entry.name
-        print(dirname)
-
-        collect_experiment_attrs(f"{root}/{dirname}", attrs)
-
-        # for key, vals in ret.items():
-        #     vals.union( attrs.setdefault(key, set()) )
-
-    return {key:list(sorted(vals)) for key,vals in attrs.items()}
-
-def collect_experiment_attrs(root, attrs):
-    for entry in os.scandir(root):
-        if not entry.is_dir():
-            continue
-
-        dirname = entry.name
-        print("\t", dirname)
-        dirpath = f"{root}/{dirname}"
-
+    for dirpath in iter_dir_with_spectra(root):
         ret = read_spectra_attrs(dirpath)
         for key,val in ret.items():
             # print(key, val)
             vals = attrs.setdefault(key, set())
             if val not in vals:
                 vals.add(val)
+
+    # for entry in os.scandir(root):
+    #     if not entry.is_dir():
+    #         continue
+
+    #     dirname = entry.name
+    #     print(dirname)
+
+    #     collect_experiment_attrs(f"{root}/{dirname}", attrs)
+
+    #     # for key, vals in ret.items():
+    #     #     vals.union( attrs.setdefault(key, set()) )
+
+    return {key:list(sorted(vals)) for key,vals in attrs.items()}
+
+# def collect_experiment_attrs(root, attrs):
+#     for entry in os.scandir(root):
+#         if not entry.is_dir():
+#             continue
+
+#         dirname = entry.name
+#         print("\t", dirname)
+#         dirpath = f"{root}/{dirname}"
+
+#         ret = read_spectra_attrs(dirpath)
+#         for key,val in ret.items():
+#             # print(key, val)
+#             vals = attrs.setdefault(key, set())
+#             if val not in vals:
+#                 vals.add(val)
