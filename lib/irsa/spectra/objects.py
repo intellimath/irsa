@@ -56,33 +56,27 @@ def smooth_spectra(xs, ys, tau2=1.0, windows=None, beta=100):
     ys_smooth = smooth.whittaker_smooth(ys, tau2=tau2, W2=W2, d=2)
     return ys_smooth
 
-_attr_names = (
-    "вид_бактерий", "штамм_бактерий", "резистентность", 
-    "отсечки_по_молекулярной_массе", "начальная_концентрация_клеток_в_пробе", 
-    'номер_цикла', 'номер_эксперимента_в_цикле', 
-    'номер_повтора', 'тип_измерения_спектров',
-    'начальная_концентрация_клеток_в_пробе', 
-    'капля', 'вода', 'отмывка_фильтров', "дата", 
-    "комментарий"
-)
-
 class SpectraSeries:
     #
     def __init__(self, x, y, attrs):
         self.x = x
         self.y = y
         self.attrs = attrs
-        key = "_".join(
-            (attrs[k] if attrs[k] != 'no_date' else '_') for k in _attr_names if k in attrs)
-        self.key = key
+        # key = "_".join(
+        #     (attrs[k] if attrs[k] != 'no_date' else '_') for k in _attr_names if k in attrs)
+        # self.key = key
         self.excludes = []
         self.tau2s = None
         self.bs = None
         self.windows = []
     #
+    @property
+    def key(self):
+        return self.attrs["key"]
+    #
     def __getitem__(self, i):
         sp = Spectra(self.x[i], self.y[i], self.attrs)
-        sp.key = self.key
+        # sp.key = self.key
         sp.windows = self.windows
         return sp
     #
@@ -477,6 +471,17 @@ class SpectraSeries:
             Y = ys @ ys.T
             d = det(Y)
     #
+    def isfinite(self):
+        for k, ys in enumerate(self.y):
+            m = np.sum(1 - np.isfinite(ys).astype("i"))
+            if m > 0:
+                print(f"Not all finite in serie {k}: {self.key}: {m}")
+    #
+    def drop_zeros_spectrum(self):
+        Ys = self.y
+        for k in range(len(Ys)):
+            Ys[k] = np.array([y for y in Ys[k] if not np.all(y == 0)])
+    #
     def derivative(self):
         Ys = self.y
         for k in range(len(Ys)):
@@ -616,7 +621,7 @@ class SpectraSeries:
         Xs = np.ascontiguousarray(self.x)
 
         o = Spectra(Xs, Ys, self.attrs)
-        o.key = self.key
+        # o.key = self.key
         # o.stderr = np.ascontiguousarray(dYs)
         return o
     #
@@ -639,6 +644,10 @@ class Spectra:
         self.bs = np.zeros_like(self.y)
         self.ys_bs = np.zeros_like(self.y)
         self.ys_sm = y.copy()
+    #
+    @property
+    def key(self):
+        return self.attrs["key"]
     #
     def ensure_xs(self):
         iter_xs = iter(self.x)
@@ -663,6 +672,18 @@ class Spectra:
         for k in range(len(Ys)):
             ys = Ys[k]
             np.putmask(ys, abs(ys)<delta, value)
+    #
+    def isfinite(self):
+        for ys in self.y:
+            m = np.sum(1 - np.isfinite(ys).astype("i"))
+            if m > 0:
+                print(f"Not all finite: {self.key}: {m}")
+    #
+    def drop_notfinite(self):
+        self.y = np.array([y for y in self.y if np.all(np.isfinite(y))])
+    #
+    def drop_zeros_spectrum(self):
+        self.y = np.array([y for y in self.y if not np.all(y == 0)])
     #
     def derivative(self):
         Ys = self.y
@@ -838,6 +859,15 @@ class Spectra:
             ys = self.y[k]
             # err = self.stderr[k]
             mu = ys.max()
+            ys[:] = (ys / mu) * scale
+            # err[:] = (err / mu) * scale
+    #
+    def scale_by_mean(self, scale=1.0):
+        N = len(self.y)
+        for k in range(N):
+            ys = self.y[k]
+            # err = self.stderr[k]
+            mu = ys.mean()
             ys[:] = (ys / mu) * scale
             # err[:] = (err / mu) * scale
     #
@@ -1028,6 +1058,7 @@ class Spectra:
 
 
             ss = np.mean(np.abs(ys_i_smooth))
+            
             bs, dd = smooth.whittaker_smooth_weight_func2(
                 ys_i_smooth / ss,
                 func=func,
@@ -1355,11 +1386,13 @@ class Spectra:
         for ys in self.y:
             data = np.c_[xs, ys]
             peaks = transformer.fit_transform(data)
-            y = peaks[:,1]
+            # y = peaks[:,1]
+            y = np.ascontiguousarray(peaks[:,1])
             y[0] = 0
-            Ys.append(y)
             if tval > 0:
                 y[y < tval] = 0
+            y1 = topf.subtract_background(ys, y)
+            Ys.append(y1)
 
         if crop > 0:
             mask = (xs >= crop)
@@ -1385,14 +1418,20 @@ class Spectra:
         xs = self.x
         Ys = self.y
         Ys_p = []
+        Ys1 = []
         for ys in self.y:
             data = np.c_[xs, ys]
             peaks = transformer.fit_transform(data)
-            y = peaks[:,1]
+            y = np.ascontiguousarray(peaks[:,1])
             y[0] = 0
-            Ys_p.append(y)
-            if tval > 0:
+            if tval is None:
+                tv = np.percentile(y[y > 0], 10)
+                y[y < tv] = 0
+            elif tval > 0:
                 y[y < tval] = 0
+            y1 = topf.subtract_background(ys, y)
+            Ys1.append(y1)
+            Ys_p.append(y)
 
         if crop > 0:
             mask = (xs >= crop)
@@ -1402,10 +1441,11 @@ class Spectra:
             # self.y = self.y[:,mask]
             Ys_p = [y[mask] for y in Ys_p]
             Ys = [y[mask] for y in Ys]
+            Ys1 = [y[mask] for y in Ys1]
 
         xrange_slider = ipywidgets.FloatRangeSlider(
-            value=(min(xs), max(xs)), 
-            min=min(xs), 
+            value=(min(xs), max(xs)),
+            min=min(xs),
             max=max(xs))
         xrange_slider.layout.width="80%"
 
@@ -1423,7 +1463,7 @@ class Spectra:
             for ys in Ys:
                 plt.plot(xs, ys, linewidth=0.5, alpha=0.25)
 
-            plt.plot(xs, Ys[ii], linewidth=1.25, color='k')
+            plt.plot(xs, Ys[ii], linewidth=1, color='k') #, marker='s', markersize=2)
             plt.minorticks_on()
             plt.grid(1)
 
@@ -1434,7 +1474,9 @@ class Spectra:
             for y in Ys_p:
                 plt.plot(xs, y, linewidth=0.5, alpha=0.25)
 
-            plt.plot(xs, Ys_p[ii], linewidth=1.25, color='DarkBlue')
+            plt.vlines(xs, 0, Ys_p[ii], linewidth=0.75, color='r', label=f"#peaks: {(Ys_p[ii]>0).sum()}")
+            plt.plot(xs, Ys1[ii], linewidth=1, color='DarkBlue') #, marker='s', markersize=2)
+            # plt.plot(xs, Ys[ii], linewidth=1, color='k')
             plt.minorticks_on()
             plt.grid(1)
 
@@ -1475,12 +1517,12 @@ class Spectra:
                 for xi,yi in zip(self.y[i], self.x):
                     print(f"{xi:.2f} {yi:.2f}")
 
-            if smoothing:
+            if smoothing and tau2_smooth > 0:
                 ys_i_smooth = smooth_spectra(xs, ys_i, tau2=tau2_smooth, windows=self.windows, beta=beta)
                 plt.plot(xs, ys_i_smooth, linewidth=2.0, color='DarkRed', 
                          label="smoothed")
             else:
-                y_i_smooth = y_i
+                y_i_smooth = ys_i
 
             x_min, x_max = xrange
             ys_range = ys_i[(x_min <= xs) & (xs <= x_max)]
@@ -1819,6 +1861,18 @@ class SpectraCollection:
         for sp in self.spectra.values():
             sp.align_bottom()
     #
+    def isfinite(self):
+        for sp in self.spectra.values():
+            sp.isfinite()
+    #
+    def drop_notfinite(self):
+        for sp in self.spectra.values():
+            sp.drop_notfinite()
+    #
+    def drop_zeros_spectrum(self):
+        for sp in self.spectra.values():
+            sp.drop_zeros_spectrum()
+    #
     def derivative(self):
         for sp in self.spectra.values():
             sp.derivative()
@@ -1853,6 +1907,10 @@ class SpectraCollection:
     def scale_by_robust_mean(self, tau=3.0, scale=1.0):
         for sp in self.spectra.values():
             sp.scale_by_robust_mean(tau=tau, scale=scale)
+    #
+    def scale_by_mean(self, scale=1.0):
+        for sp in self.spectra.values():
+            sp.scale_by_mean(scale=scale)
     #
     def plot_spectra(self, tau2_smooth=1.0, display_data=False):
         @ipywidgets.interact(key=self.select_key(), continuous_update=False)
