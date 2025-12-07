@@ -57,14 +57,14 @@ def smooth_spectra(xs, ys, tau2=1.0, windows=None, beta=100):
     return ys_smooth
 
 class SpectraSeries:
+    """
+    Набор спектров, состоящий из серий. Все спектры в серии измерены в одной "точке".
+    """
     #
     def __init__(self, x, y, attrs):
         self.x = x
         self.y = y
         self.attrs = attrs
-        # key = "_".join(
-        #     (attrs[k] if attrs[k] != 'no_date' else '_') for k in _attr_names if k in attrs)
-        # self.key = key
         self.excludes = []
         self.tau2s = None
         self.bs = None
@@ -100,10 +100,10 @@ class SpectraSeries:
                     ss = std / mu
                     if ss.mean() >= sigma_mu:
                         self.excludes.append(i)
-        
+
         i_slider = ipywidgets.IntSlider(value=0, min=0, max=len(self.y)-1)
         i_slider.layout.width="50%"
-        
+
         b_exclude = ipywidgets.Checkbox(value=(i_slider.value in self.excludes))
         
         def i_on_value_change(change):
@@ -1405,10 +1405,9 @@ class Spectra:
         Ys = np.array(Ys)
 
         sp = Spectra(xs, Ys, attrs=self.attrs)
-        sp.key = self.attrs["key"]
         return sp
     #
-    def plot_topf(self, tval=0, crop=0):
+    def plot_topf(self, tval=0, n_peaks=None, crop=0):
         import sys
         import quick_topf as topf
         i_slider = ipywidgets.IntSlider(min=0, max=len(self.y)-1, description="i")
@@ -1418,20 +1417,25 @@ class Spectra:
         xs = self.x
         Ys = self.y
         Ys_p = []
-        Ys1 = []
+        # Ys1 = []
+        Zs = []
         for ys in self.y:
             data = np.c_[xs, ys]
             peaks = transformer.fit_transform(data)
             y = np.ascontiguousarray(peaks[:,1])
             y[0] = 0
-            if tval is None:
-                tv = np.percentile(y[y > 0], 10)
+            transformer = topf.PersistenceTransformer(n_peaks=n_peaks)
+            y = topf.get_peaks(xs, ys)
+            z = topf.get_valleys(xs, ys)
+            if tval > 0:
+                tv = np.percentile(y[y > 0], tval)
                 y[y < tv] = 0
-            elif tval > 0:
-                y[y < tval] = 0
-            y1 = topf.subtract_background(ys, y)
-            Ys1.append(y1)
+                tv = np.percentile(z[z > 0], tval)
+                z[z < tv] = 0
+            # y1 = topf.subtract_background(ys, y)
+            # Ys1.append(y1)
             Ys_p.append(y)
+            Zs.append(z)
 
         if crop > 0:
             mask = (xs >= crop)
@@ -1441,7 +1445,8 @@ class Spectra:
             # self.y = self.y[:,mask]
             Ys_p = [y[mask] for y in Ys_p]
             Ys = [y[mask] for y in Ys]
-            Ys1 = [y[mask] for y in Ys1]
+            # Ys1 = [y[mask] for y in Ys1]
+            Zs = [z[mask] for z in Zs]
 
         xrange_slider = ipywidgets.FloatRangeSlider(
             value=(min(xs), max(xs)),
@@ -1453,35 +1458,67 @@ class Spectra:
         def _plot_topf(ii, xrange):
             nonlocal Ys, Ys_p, xs
 
-            fig = plt.figure("_plot_topf", figsize=(12,6))
+            fig = plt.figure("_plot_topf", figsize=(12,9))
             fig.canvas.header_visible = False
             fig.canvas.footer_visible = False
             fig.canvas.toolbar_position = 'right'
             fig.clear()
-            plt.subplot(2,1,1)
+            plt.subplot(3,1,1)
             plt.title(self.key, fontdict={"size":10}, loc="left")
             for ys in Ys:
                 plt.plot(xs, ys, linewidth=0.5, alpha=0.25)
 
-            plt.plot(xs, Ys[ii], linewidth=1, color='k') #, marker='s', markersize=2)
+            ys_ii = Ys[ii]
+            yp_ii = Ys_p[ii]
+            plt.plot(xs, ys_ii, linewidth=1, color='k') #, marker='s', markersize=2)
+            plt.vlines(xs[yp_ii > 0], ys_ii[yp_ii > 0]-yp_ii[yp_ii > 0], ys_ii[yp_ii > 0], linewidth=0.75, color='r',
+                       label=f"#peaks: {(Ys_p[ii]>0).sum()}") # ys_ii-Ys_p[ii]
+            # zs_ii = Zs[ii]
+            # plt.plot(xs[zs_ii > 0], ys[zs_ii > 0], linewidth=1, color='m', marker='s', markersize=2)
+            plt.minorticks_on()
+            plt.grid(1)
+            plt.legend()
+
+            x_min, x_max = xrange
+            plt.xlim(0.99*x_min, 1.01*x_max)
+
+            plt.subplot(3,1,2)
+            ys_ii = Ys[ii]
+            ymax = np.max(ys_ii)
+            us_ii = ymax - ys_ii
+            data = np.c_[xs, us_ii]
+            transformer = topf.PersistenceTransformer()
+            peaks2 = transformer.fit_transform(data)
+            up_ii = np.ascontiguousarray(peaks2[:,1])
+            if tval is not None and tval > 0:
+                up_ii[up_ii < tval] = 0
+            # yp_ii[0] = 0
+
+            plt.plot(xs, ymax - us_ii, linewidth=1, color='k') #, marker='s', markersize=2)
+            plt.vlines(xs[up_ii > 0], 0, ymax - us_ii[up_ii > 0], linewidth=0.5, color='r', linestyles='--')
+            # plt.vlines(xs[up_ii > 0], 0, (ymax - us_ii - up_ii)[up_ii > 0], linewidth=1.0, color='r')
+            plt.plot(xs[up_ii > 0], ymax - us_ii[up_ii > 0], linewidth=1, color='m', marker='s', markersize=2)
             plt.minorticks_on()
             plt.grid(1)
 
             x_min, x_max = xrange
             plt.xlim(0.99*x_min, 1.01*x_max)
 
-            plt.subplot(2,1,2)
-            for y in Ys_p:
-                plt.plot(xs, y, linewidth=0.5, alpha=0.25)
+            plt.subplot(3,1,3)
+            # for y in Ys_p:
+            #     plt.plot(xs, y, linewidth=0.5, alpha=0.25)
 
+            Zs[ii][-10:]=0
             plt.vlines(xs, 0, Ys_p[ii], linewidth=0.75, color='r', label=f"#peaks: {(Ys_p[ii]>0).sum()}")
-            plt.plot(xs, Ys1[ii], linewidth=1, color='DarkBlue') #, marker='s', markersize=2)
+            plt.vlines(xs, -Zs[ii], 0, linewidth=0.75, color='g', label=f"#valleys: {(Zs[ii]>0).sum()}")
             # plt.plot(xs, Ys[ii], linewidth=1, color='k')
             plt.minorticks_on()
             plt.grid(1)
 
             x_min, x_max = xrange
             plt.xlim(0.99*x_min, 1.01*x_max)
+            plt.legend()
+
 
             plt.tight_layout()
             # plt.xlim(x_min, x_max)
@@ -1778,6 +1815,12 @@ class SpectraCollection:
     def __setitem__(self, key, val):
         self.spectra[key] = val
     #
+    def update(self, spcols, force=False):
+        for key, sp in spcols.items():
+            if not force and key in self.spectra:
+                raise TypeError(f"Spectra collection already has {key}")
+            self.spectra[key] = sp
+    #
     def __iter__(self):
         return iter(self.spectra)
     #
@@ -1793,11 +1836,12 @@ class SpectraCollection:
                 yield sp
     #
     def filter(self, **kwds):
-        kwds_items = kwds.items()
+        kwds_items = list(kwds.items())
         for sp in self.spectra.values():
             flag = True
+            attrs = sp.attrs
             for name, val in kwds_items:
-                if sp.attrs[name] != val:
+                if attrs[name] != val:
                     flag = False
                     break
             if flag:
@@ -1816,7 +1860,7 @@ class SpectraCollection:
 
         attrs = {name:val for name,val in kwds.items()}
         sp = Spectra(ys, xs, attrs)
-        sp.key = "_".joing(kwds.values())
+        sp.attrs["key"] = "_".joing(kwds.values())
         return sp
     #
     def same_x(self):
@@ -1844,7 +1888,8 @@ class SpectraCollection:
     def select_key(self):
         if self.wg_select_key is None:
             keys = list(self.keys())
-            self.wg_select_key = wg_select = ipywidgets.Dropdown(options=keys, value=keys[0], description="Spectra key:")
+            self.wg_select_key = wg_select = \
+                    ipywidgets.Dropdown(options=keys, value=keys[0], description="Spectra key:")
             wg_select.layout.width="75%"
             self.current_key = keys[0]
 
@@ -1883,17 +1928,16 @@ class SpectraCollection:
             sp = self.spectra[key]
             sp.plot_egor(W, S)
     #
-    def plot_topf(self, tval=0, crop=200):
+    def plot_topf(self, tval=0, crop=200, n_peaks=None):
         @ipywidgets.interact(key=self.select_key(), continuous_update=False)
         def _plot_topf2(key):
             sp = self.spectra[key]
-            sp.plot_topf(tval=tval, crop=crop)
+            sp.plot_topf(tval=tval, crop=crop, n_peaks=n_peaks)
     #
     def topf(self, tval=0, crop=0):
         col = SpectraCollection()
         for key, sp in self.spectra.items():
-            col[key] = sp2 = sp.topf(tval=tval, crop=crop)
-            sp2.key = key
+            col[key] = sp.topf(tval=tval, crop=crop)
         return col
     #
     def crop(self, start_index, end_index=None):
