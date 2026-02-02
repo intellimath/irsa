@@ -39,21 +39,55 @@ def scale_max(x, alpha=0.01):
     else:
         return (1+alpha)*x
 
-def smooth_spectra(xs, ys, tau2=1.0, windows=None, beta=100, tune=False):
-    ys_smooth = smooth.whittaker_smooth(ys, tau2=tau2, d=2)
+def logscale(ys, by="std"):
+    zs = np.log(ys - ys.min() + 1)
+    mu = zs.mean()
+    if by == "mean":
+        zs = zs / mu
+    elif by == "std":
+        ss = zs.std()
+        zs = (zs - mu) / ss
+    zs = np.exp(zs)
+    return zs
 
-    ee = ys - ys_smooth
-    ss = ee.std()
-    if ss != 0:
-        ee /= ee.std()
+def smooth_spectra(xs, ys, tau2=1.0, windows=None, beta=100, tune=True):
+    W2 = None
+    if tune:
+        ys_smooth = smooth.whittaker_smooth(ys, tau2=tau2, d=2)
 
-    W2 = np.exp(-0.5 * ee * ee)[1:-1]
-    if windows is not None:
-        for xa, xb in windows:
-            W2[(xs[1:-1] >= xa) & (xs[1:-1] <= xb)] *= beta
+        ee = ys - ys_smooth
+        ss = ee.std()
+        if ss != 0:
+            ee /= ee.std()
+
+        W2 = np.exp(-0.5 * ee * ee)[1:-1]
+        if windows is not None:
+            for xa, xb in windows:
+                W2[(xs[1:-1] >= xa) & (xs[1:-1] <= xb)] *= beta
 
     ys_smooth = smooth.whittaker_smooth(ys, tau2=tau2, W2=W2, d=2)
     return ys_smooth
+
+def smooth_pca(X, *, n_component=None):
+    from sklearn.decomposition import PCA, TruncatedSVD
+
+    m = X.shape[0]
+    X1 = np.zeros(m+10, "d")
+    X1[5:-5] = X
+    X1[:5] = X[0]
+    X1[-5:] = X[-1]
+    m1 = X1.shape[0]
+    Z = np.empty((m1,m1), "d")
+    for i in range(m1):
+        Z[i,:] = np.roll(X1, i)
+    pca = PCA(n_component)
+    U = pca.fit_transform(Z)
+    ratio = pca.explained_variance_ratio_.sum()
+    # print(ratio)
+    Z2 = pca.inverse_transform(U)
+    for i in range(m):
+        Z2[i,:] = np.roll(Z2[i], -i)
+    return Z2.mean(axis=0)[5:-5]
 
 class SpectraSeries:
     """
@@ -104,7 +138,7 @@ class SpectraSeries:
         i_slider.layout.width="50%"
 
         b_exclude = ipywidgets.Checkbox(value=(i_slider.value in self.excludes))
-        
+
         def i_on_value_change(change):
             i = i_slider.value
             b_exclude.value = (i in self.excludes)
@@ -183,7 +217,7 @@ class SpectraSeries:
 
         self.exclude_selected()
     #
-    def select_baselines(self, tau2=1.0e5, tau2_smooth=10, func=None, func2=None, func2_e=None, beta=100, func2_mode="e", d=2):
+    def select_baselines(self, tau2=1.0e5, tau2_smooth=10, func=None, func2=None, func2_e=None, beta=100, func2_mode="e", xrange=None, d=2):
         import matplotlib.pyplot as plt
         import ipywidgets
 
@@ -207,14 +241,15 @@ class SpectraSeries:
             #     sigma2 = inventory.robust_mean_2d_t((Ys - mu)**2, 3.5)
             #     func = funcs.Step(np.sqrt(sigma2.mean()))
 
-            spcol.select_baselines(tau2=tau2, tau2_smooth=tau2_smooth, func=func, func2=func2, func2_e=func2_e, beta=beta, func_mode='e', d=d)
+            spcol.select_baselines(tau2=tau2, tau2_smooth=tau2_smooth, func=func, func2=func2, func2_e=func2_e, beta=beta, 
+                                   func_mode='e', xrange=xrange, d=d)
     #
     def replace_spectra_with_corrected(self):
         for i in range(len(self.y)):
             sp = self[i]
             sp.replace_spectra_with_corrected()
     #
-    def plot_spectra(self, tau2_smooth=1.0, display_data=False):
+    def plot_spectra(self, tau2_smooth=1.0, display_data=False, n_component=None, noise_level=0.01):
         import matplotlib.pyplot as plt
         import ipywidgets
 
@@ -224,7 +259,7 @@ class SpectraSeries:
         @ipywidgets.interact(i_series=i_series_slider, continuous_update=False)
         def _plot_spectra(i_series):
             sp = self[i_series]
-            sp.plot_spectra(tau2_smooth=tau2_smooth, display_data=display_data)
+            sp.plot_spectra(tau2_smooth=tau2_smooth, display_data=display_data, n_component=n_component)
     #
     def plot_pca_spectra(self, n_component=None):
         import matplotlib.pyplot as plt
@@ -352,10 +387,10 @@ class SpectraSeries:
 
         i_slider = ipywidgets.IntSlider(min=0, max=len(self.y)-1)
         i_slider.layout.width="50%"
-                
+
         # def i_on_value_change(change):
         #     i = i_slider.value
-        
+
         # i_slider.on_trait_change(i_on_value_change, name="value")
 
         @ipywidgets.interact(i=i_slider, continuous_update=False)
@@ -396,48 +431,110 @@ class SpectraSeries:
             plt.minorticks_on()
             plt.show()      
     #
-    def plot_sigma_mu(self):
+    def plot_logscale(self):
+        import matplotlib.pyplot as plt
+        import ipywidgets
+
+        i_slider = ipywidgets.IntSlider(min=0, max=len(self.y)-1)
+        i_slider.layout.width="50%"
+
+        # def i_on_value_change(change):
+        #     i = i_slider.value
+
+        # i_slider.on_trait_change(i_on_value_change, name="value")
+
+        @ipywidgets.interact(i=i_slider, continuous_update=False)
+        def _plot_logscale_items(i=i_slider):
+            xs = self.x[i]
+            Ys = self.y[i]
+
+            plt.close("_zscore_i")
+            fig = plt.figure("plot_logscale_i", figsize=(12,4))
+            fig.canvas.header_visible = False
+            fig.canvas.footer_visible = False
+            fig.canvas.toolbar_position = 'right'
+            plt.title(f"Logscale: {self.key} ({len(self.x[i])} spectra)")
+
+            Zs = np.empty_like(Ys)
+            for k, ys in enumerate(Ys):
+                Zs[k,:] = logscale(ys)
+
+            for zs in Zs:
+                plt.plot(xs, zs, linewidth=0.25, alpha=0.25)
+
+            plt.plot(xs, inventory.robust_mean_2d_t(Zs, 3.5), color="k", linewidth=1.5)
+
+            plt.minorticks_on()
+            plt.show()
+    #
+    def plot_sigma_mu(self, tau2_smooth=1.0, tau2_bl=1.0e6, func=None, n_component=None):
         import matplotlib.pyplot as plt
         import ipywidgets
         import mlgrad.smooth as smooth
 
         i_slider = ipywidgets.IntSlider(min=0, max=len(self.y)-1)
         i_slider.layout.width="50%"
-                
-        # def i_on_value_change(change):
-        #     i = i_slider.value
-        
-        # i_slider.on_trait_change(i_on_value_change, name="value")
+
+        xrange_slider = ipywidgets.IntRangeSlider(
+            value=(min(self.x[0]), max(self.x[0])), 
+            min=min(self.x[0]), 
+            max=max(self.x[0]))
+        xrange_slider.layout.width="90%"
+
+        if func is None:
+            func = funcs.Step(0.0, 0.001)
 
         @ipywidgets.interact(i=i_slider, continuous_update=False)
-        def _plot_sigma_mu(i=i_slider):
+        def _plot_sigma_mu(i=i_slider, xrange=xrange_slider):
             xs = self.x[i]
             Ys = self.y[i]
 
             plt.close("_sigma_mu_i")
-            fig = plt.figure("_sigma_mu_i", figsize=(10,4))
+            fig = plt.figure("_sigma_mu_i", figsize=(12,5))
             fig.canvas.header_visible = False
             fig.canvas.footer_visible = False
             fig.canvas.toolbar_position = 'right'
-            plt.title(rf"$100\cdot\sigma/\mu$: {self.key} ({len(self.x[i])} spectra)")
+            plt.title(rf"$\sigma/\mu$: {self.key} ({len(self.x[i])} spectra)")
             mu = inventory.robust_mean_2d_t(Ys, 3.5)
             sigma = inventory.robust_mean_2d_t(abs(Ys - mu), 3.5)
-            sigma_mu = 100*sigma/mu
-            plt.scatter(xs, sigma_mu, s=2, c='k', label=r"$\sigma/\mu$")
-            ss = smooth.whittaker_smooth(sigma_mu, tau2=1.0e5)
-            plt.plot(xs, ss, color="b", linewidth=1.5, label=r"smoothed $\sigma/\mu$")
-            
-            plt.plot(xs, 1+mu/max(mu), color="Gray", alpha=0.5, label="current spectrum")
-            
+            mu2 = mu/max(mu)
 
-            plt.hlines([0.5,1], min(xs), max(xs), colors='r', linewidths=0.5, linestyles="--")
+            bl, __ = smooth.whittaker_smooth_weight_func2(
+                mu2,
+                func=func,
+                func2_e=None, #inventory.relative_abs_max,
+                tau2=tau2_bl,
+                d=2)
+            mu2_bl = mu2 - bl
+            # plt.plot(xs, mu2_bl, color="m", alpha=0.75, label=r"baseline")
+
+            # ss = inventory.robust_mean_1d(sigma, 3.5) / mu
+
+            sigma_mu = sigma/mu
+
+            plt.scatter(xs, sigma_mu, s=2, c='k', label=r"$\sigma/\mu$")
+            sm = smooth.whittaker_smooth(sigma_mu, tau2=1.0e4)
+            plt.plot(xs, sm, color="b", linewidth=1.5, label=r"$\sigma/\mu$ (smoothed)")
+
+            plt.plot(xs, 0.5 + mu2_bl, color="Gray", alpha=0.5, label=r"$\mu/\mu_{\max} - \mu_{\text{bl}}$")
+            mu2_bl_smoothed = smooth.whittaker_smooth(mu2_bl, tau2=tau2_smooth) #, W2=1+ss)
+            plt.plot(xs, 0.5 + mu2_bl_smoothed, color="k", alpha=0.75, label=r"$\mu/\mu_{\max} - \mu_{\text{bl}}$ (smoothed)")
+
+            mu2_bl2 = smooth_pca(mu2_bl, n_component=n_component)
+            plt.plot(xs, 0.75 + mu2_bl, color="Gray", alpha=0.5)
+            plt.plot(xs, 0.75 + mu2_bl2, color="darkred", alpha=0.75, label=f"denoised")
+
+            plt.hlines([0.05,0.1,0.2,0.5,], min(xs), max(xs), colors='r', linewidths=0.25, linestyles="--")
             plt.minorticks_on()
             plt.tight_layout()
-            plt.show()            
+            x_min, x_max = xrange
+            plt.xlim(0.99*x_min, 1.01*x_max)
+            plt.legend(loc='upper right', bbox_to_anchor=(1.0, 1.0))
+            plt.show()
     #
     # def crop(self, start_index, end_index=None):
     #     Xs = self.x
-    #     Ys = self.y 
+    #     Ys = self.y
     #     N = len(Ys)
     #     for k in range(N):
     #         if end_index is None:
@@ -488,7 +585,7 @@ class SpectraSeries:
                 y[:-1] = y[:-1] - y[1:]
                 y[-1] = 0
     #
-    def scale_zs(self, delta=3.0):
+    def scale_zs(self, delta=3.5):
         Ys = self.y
         for k in range(len(Ys)):
             ys = Ys[k]
@@ -693,6 +790,7 @@ class Spectra:
                 y[:] = y2
             else:
                 Ys.append(y)
+        print(self.key)
         if not inplace:
             Ys = np.array(Ys)
             return Spectra(x, Ys, self.attrs)
@@ -856,7 +954,7 @@ class Spectra:
                 i0, i1 = min(ii), max(ii)
                 plt.fill_between(xs[i0:i1], 0, np.max(self.y[:,i0:i1], axis=0), color='LightBlue')
     #
-    def scale_by_robust_mean(self, tau=3.0, scale=1.0):
+    def scale_by_robust_mean(self, tau=3.5, scale=1.0):
         N = len(self.y)
         for k in range(N):
             ys = self.y[k]
@@ -870,7 +968,7 @@ class Spectra:
         for k in range(N):
             ys = self.y[k]
             # err = self.stderr[k]
-            mu = ys.max()
+            mu = abs(ys).max()
             ys[:] = (ys / mu) * scale
             # err[:] = (err / mu) * scale
     #
@@ -879,7 +977,7 @@ class Spectra:
         for k in range(N):
             ys = self.y[k]
             # err = self.stderr[k]
-            mu = ys.mean()
+            mu = abs(ys).mean()
             ys[:] = (ys / mu) * scale
             # err[:] = (err / mu) * scale
     #
@@ -961,9 +1059,9 @@ class Spectra:
             for k, y in enumerate(self.y):
                 y[:] = smooth.whittaker_smooth(y, W2=W2, tau2=tau, d=2)
     #
-    def select_baselines(self, tau2=1000.0, tau1=0.0, tau_z=0, tau2_smooth=1.0, override_tau2=True,
-                         bs_scale=3.0, alpha=0.001, eps=0.001, beta=1.0e2,
-                         func=None, func2=None, func2_e=None, w_tau2=1.0,
+    def plot_smoothed(self, tau2=1000.0, tau1=0.0, override_tau2=True,
+                         beta=1.0e2, xrange=None,
+                         func=None, func2=None, func2_e=None,
                          d=2, **kwargs):
 
         N = len(self.y)
@@ -1018,10 +1116,192 @@ class Spectra:
         # tau1_slider.on_trait_change(tau1_on_value_change, name="value")
         i_slider.on_trait_change(i_on_value_change, name="value")
 
-        xrange_slider = ipywidgets.FloatRangeSlider(
-            value=(min(self.x), max(self.x)), 
-            min=min(self.x), 
-            max=max(self.x))
+        if xrange is None:
+            xrange_slider = ipywidgets.FloatRangeSlider(
+                value=(min(self.x), max(self.x)),
+                min=min(self.x),
+                max=max(self.x))
+        else:
+            xmin, xmax = xrange
+            xrange_slider = ipywidgets.FloatRangeSlider(
+                value=(xmin, xmax),
+                min=min(self.x),
+                max=max(self.x))
+        xrange_slider.layout.width="80%"
+
+        # button = ipywidgets.Button(description="Smooth baselines")
+        # def button_click(_):
+        #     self.replace_spectra_with_corrected()
+        # button.on_click(button_click)
+        # display(button)
+
+        @ipywidgets.interact(i=i_slider, tau2=tau2_slider, #tau1=tau1_slider, 
+                             xrange=xrange_slider, continuous_update=False)
+        def _plot_smoothed(i, tau2, xrange):
+            fig = plt.figure("_plot_smoothed", figsize=(12,4))
+            fig.canvas.header_visible = False
+            fig.canvas.footer_visible = False
+            fig.canvas.toolbar_position = 'right'
+            fig.clear()
+            plt.title(self.key, fontdict={"size":10}, loc="left")
+            xs = self.x
+            for ys in self.y:
+                plt.plot(xs, ys, linewidth=0.4, alpha=0.5)
+
+            ys_i = self.y[i]
+
+            # W = np.ones(len(self.y[0]), "d")
+            W2 = np.ones(len(self.y[0]), "d")
+            if self.windows is not None:
+                for xa,xb in self.windows:
+                    W2[(xs >= xa) & (xs <= xb)] = beta
+
+            nonlocal func
+
+            plt.plot(xs, ys_i, linewidth=1.0, color='DarkBlue', marker='o', ms=2, label=f"current ({i})")
+
+            ys_sm, dd = smooth.whittaker_smooth_weight_func2(
+                ys_i,
+                func=func,
+                func2=func2,
+                func2_e=func2_e,
+                tau2=tau2,
+                d=d)
+
+            plt.plot(xs, ys_sm, linewidth=1.0, color='m', label=rf"smoothed ($\lambda=${tau2:.1f})")
+
+            x_min, x_max = xrange
+            plt.xlim(0.99*x_min, 1.01*x_max)
+
+            # bs_xrange = bs[(x_min <= xs) & (xs <= x_max)]
+            # bs_max, bs_min = np.max(bs_xrange), np.min(bs_xrange)
+            ys_xrange = ys_i[(x_min <= xs) & (xs <= x_max)]
+            plt.ylim(scale_min(ys_xrange.min()), scale_max(ys_xrange.max()))
+            plt.minorticks_on()
+            plt.grid(1)
+            plt.legend()
+            plt.tight_layout()
+            plt.show()
+    #
+    def logscale(self):
+        import matplotlib.pyplot as plt
+        import ipywidgets
+
+        i_slider = ipywidgets.IntSlider(min=0, max=len(self.y)-1)
+        i_slider.layout.width="50%"
+
+        for k, ys in enumerate(self.y):
+            self.y[k,:] = logscale(ys)
+    #
+    def loglog(self):
+        import matplotlib.pyplot as plt
+        import ipywidgets
+
+        i_slider = ipywidgets.IntSlider(min=0, max=len(self.y)-1)
+        i_slider.layout.width="50%"
+
+        self.x = np.log(self.x)
+        for k,ys in enumerate(self.y):
+            self.y[k,:] = np.log(ys - ys.min() + 1)
+    #
+    def plot_logscale(self):
+        import matplotlib.pyplot as plt
+        import ipywidgets
+
+        i_slider = ipywidgets.IntSlider(min=0, max=len(self.y)-1)
+        i_slider.layout.width="50%"
+
+        Zs = np.empty_like(self.y)
+        for k, ys in enumerate(self.y):
+            Zs[k,:] = logscale(ys)
+
+        @ipywidgets.interact(i=i_slider, continuous_update=False)
+        def _plot_logscale_items(i=i_slider):
+            xs = self.x
+
+            plt.close("_zscore_i")
+            fig = plt.figure("plot_logscale_i", figsize=(13,4))
+            fig.canvas.header_visible = False
+            fig.canvas.footer_visible = False
+            fig.canvas.toolbar_position = 'right'
+            plt.title(f"Logscale: {self.key} ({len(xs)} spectra)")
+
+            for zs in Zs:
+                plt.plot(xs, zs, linewidth=0.25, alpha=0.25)
+
+            plt.plot(xs, Zs[i], color="k", linewidth=1.5)
+
+            plt.minorticks_on()
+            plt.show()
+    #
+    def select_baselines(self, tau2=1000.0, tau1=0.0, tau2_smooth=0.0, override_tau2=True,
+                         bs_scale=3.0, alpha=0.001, eps=0.001, beta=1.0e2,
+                         func=None, func2=None, func2_e=None, xrange=None,
+                         d=2, **kwargs):
+
+        N = len(self.y)
+
+        xs = self.x
+
+        if override_tau2:
+            for i in range(N):
+                self.tau2_values[i] = tau2
+        else:
+            mask = (self.tau2_values == 0)
+            if mask.sum() > 0:
+                self.tau2_values[mask] = tau2
+
+        # self.tau1_values = N * [tau1]
+
+        i_slider = ipywidgets.IntSlider(min=0, max=len(self.y)-1)
+        i_slider.layout.width="50%"
+
+        tau2_0 = self.tau2_values[0]
+        tau2_slider = ipywidgets.FloatSlider(value=tau2_0, min=tau2_0/10, max=tau2_0*10, step=tau2_0/50)
+        tau2_slider.layout.width="80%"
+
+        # tau1_slider = ipywidgets.FloatSlider(value=self.tau1_values[0], min=tau1_min, max=tau1_max, step=tau1_step)
+        # tau1_slider.layout.width="80%"
+
+        def tau2_on_value_change(change):
+            i = i_slider.value
+            self.tau2_values[i] = tau2_slider.value
+
+        # def tau1_on_value_change(change):
+        #     i = i_slider.value
+        #     self.tau1_values[i] = tau1_slider.value
+
+        def i_on_value_change(change):
+            i = i_slider.value
+            tau2 = tau2_slider.value = self.tau2_values[i]
+            tau2_slider.min = tau2 / 10
+            tau2_slider.max = tau2 * 10
+            tau2_slider.step = tau2_slider.min / 50
+            # tau1_slider.value = self.tau1_values[i]
+
+        def xrange_on_value_change(change):
+            xmin, xmax = xrange_slider.value
+            # plt.xlim(xmin, xrange)
+            # i = i_slider.value
+            # ys = self.y[i]
+            # ys = ys[self.x >= xmin & self.x <= xmax]
+            # plt.ylim(0.9*min(ys), 1.1*max(ys))
+
+        tau2_slider.on_trait_change(tau2_on_value_change, name="value")
+        # tau1_slider.on_trait_change(tau1_on_value_change, name="value")
+        i_slider.on_trait_change(i_on_value_change, name="value")
+
+        if xrange is None:
+            xrange_slider = ipywidgets.FloatRangeSlider(
+                value=(min(self.x), max(self.x)),
+                min=min(self.x),
+                max=max(self.x))
+        else:
+            xmin, xmax = xrange
+            xrange_slider = ipywidgets.FloatRangeSlider(
+                value=(xmin, xmax),
+                min=min(self.x),
+                max=max(self.x))
         xrange_slider.layout.width="80%"
 
         button = ipywidgets.Button(description="Subtract baselines")
@@ -1042,7 +1322,7 @@ class Spectra:
             plt.title(self.key, fontdict={"size":10}, loc="left")
             xs = self.x
             for ys in self.y:
-                plt.plot(xs, ys, linewidth=0.4, alpha=0.5)
+                plt.plot(xs, ys, linewidth=0.4, alpha=0.25)
 
             ys_i = self.y[i]
 
@@ -1077,14 +1357,13 @@ class Spectra:
                 func2=func2,
                 func2_e=func2_e,
                 tau2=tau2,
-                tau_z=tau_z,
                 d=d)
 
             bs *= ss
             self.bs[i,:] = bs
             self.ys_bs[i,:] = self.y[i] - bs
 
-            plt.plot(xs, bs, linewidth=1.0, color='m', label="baseline")
+            plt.plot(xs, bs, linewidth=1.0, color='m', label=f"baseline (K:{dd['K']} tol:{dd['tol']:.3e})")
 
             x_min, x_max = xrange
             plt.xlim(0.99*x_min, 1.01*x_max)
@@ -1107,7 +1386,7 @@ class Spectra:
             # plt.title(self.key, fontdict={"size":10}, loc="left")
             ax2 = plt.subplot(2,1,2, sharex=ax1)
             for ys_bs in self.ys_bs:
-                plt.plot(self.x, ys_bs, linewidth=0.4, alpha=0.5)
+                plt.plot(self.x, ys_bs, linewidth=0.4, alpha=0.25)
             plt.plot(self.x, self.ys_bs[i], linewidth=0.75, color='DarkBlue', label="current")
             ms = []
             for i,ys_bs in enumerate(self.ys_bs):
@@ -1132,7 +1411,7 @@ class Spectra:
                          func=None, func2=None, func2_e=None,
                          d=2,
                          override_tau2=False,
-                         tau_z=0, tau2_smooth=1.0, beta=100,
+                         tau2_smooth=1.0, beta=100,
                          **kwargs):
         import matplotlib.pyplot as plt
         import ipywidgets
@@ -1223,7 +1502,6 @@ class Spectra:
                     func=func,
                     func2=func2,
                     tau2=self.tau2s[i],
-                    tau_z=tau_z,
                     d=d,
                     func2_mode=func2_mode)
                 Bs.append(bs)
@@ -1244,6 +1522,7 @@ class Spectra:
             plt.tight_layout()
             plt.show()
     #
+    
 #     def get_baselines(self, kind="irsa", **kwargs):
 #         import pybaselines
 
@@ -1300,7 +1579,7 @@ class Spectra:
     def subtract_selected_baselines(self):
         self.ys_bs = self.y - self.bs
     #
-    def subtract_baselines(self, func=None, func2=None, d=2, func2_mode="d", tau2_smooth=10, beta=100, tau_z=0):
+    def subtract_baselines(self, func=None, func2=None, func2_e=None, d=2, func2_mode="d", tau2_smooth=0, beta=100):
         import ipywidgets
         from IPython.display import display
 
@@ -1334,8 +1613,8 @@ class Spectra:
                 ys_smooth,
                 func=func,
                 func2=func2,
+                func2_e=func2_e,
                 tau2=self.tau2s[j],
-                tau_z=tau_z,
                 d=d,
                 func2_mode=func2_mode)
 
@@ -1550,7 +1829,9 @@ class Spectra:
             # # plt.xlim(x_min, x_max)
             plt.show()
     #
-    def plot_spectra(self, smoothing=True, tau2_smooth=1, beta=100, display_data=False, **kwargs):
+    def plot_spectra(self, smoothing=True, tau2_smooth=1, beta=100, display_data=False, n_component=None, **kwargs):
+        from sklearn.decomposition import PCA, TruncatedSVD
+
         i_slider = ipywidgets.IntSlider(min=0, max=len(self.y)-1, description="i")
         i_slider.layout.width="50%"
 
@@ -1571,21 +1852,22 @@ class Spectra:
             plt.title(self.attrs["key"], fontdict={"size":10}, loc="left")
             xs = self.x
             for ys in self.y:
-                plt.plot(xs, ys, linewidth=0.5, alpha=0.25)
+                plt.plot(xs, ys, linewidth=0.25, alpha=0.25)
 
             ys_i = self.y[i]
-            plt.plot(xs, ys_i, linewidth=1.0, color='DarkBlue', 
-                     label="current", alpha=0.5)
+            plt.plot(xs, ys_i, linewidth=1.0, color='DarkBlue', label="current", alpha=0.5)
             if display_data:
                 for xi,yi in zip(self.y[i], self.x):
                     print(f"{xi:.2f} {yi:.2f}")
 
-            if smoothing and tau2_smooth > 0:
-                ys_i_smooth = smooth_spectra(xs, ys_i, tau2=tau2_smooth, windows=self.windows, beta=beta, )
-                plt.plot(xs, ys_i_smooth, linewidth=2.0, color='DarkRed',
-                         label="smoothed")
-            else:
-                y_i_smooth = ys_i
+            # if smoothing and tau2_smooth > 0:
+            #     ys_i_smooth = smooth_spectra(xs, ys_i, tau2=tau2_smooth, windows=self.windows, beta=beta, )
+            #     plt.plot(xs, ys_i_smooth, linewidth=2.0, color='DarkRed',
+            #              label="smoothed")
+            # else:
+            #     y_i_smooth = ys_i
+            ys_i_smooth = smooth_pca(ys_i, n_component=n_component)
+            plt.plot(xs, ys_i_smooth, linewidth=1.0, color='DarkRed', label=f"smoothed")
 
             x_min, x_max = xrange
             ys_range = ys_i[(x_min <= xs) & (xs <= x_max)]
@@ -1931,10 +2213,26 @@ class SpectraCollection:
     def apply(self, func, inplace=True):
         if inplace:
             for key, sp in self.spectra.items():
+                print(key)
                 sp.apply(func, inplace=True)
         else:
             col = SpectraCollection()
             for key, sp in self.spectra.items():
+                print(key)
+                sp2 = sp.apply(func, inplace=False)
+                col[key] = sp2
+            return col
+    #
+    def apply_par(self, func, inplace=True):
+        from joblib import Parallel, delayed
+        if inplace:
+            Parallel(n_job=-1, backend="loky")(
+                delayed(sp.apply)(func, inplace=True) for key, sp in self.spectra.items()
+            )
+        else:
+            col = SpectraCollection()
+            for key, sp in self.spectra.items():
+                print(key)
                 sp2 = sp.apply(func, inplace=False)
                 col[key] = sp2
             return col
@@ -1959,6 +2257,24 @@ class SpectraCollection:
         for sp in self.spectra.values():
             sp.derivative()
     #
+    def logscale(self):
+        @ipywidgets.interact(key=self.select_key(), continuous_update=False)
+        def _plot_logscale(key):
+            sp = self.spectra[key]
+            sp.logscale()
+    #
+    def loglog(self):
+        @ipywidgets.interact(key=self.select_key(), continuous_update=False)
+        def _plot_logscale(key):
+            sp = self.spectra[key]
+            sp.loglog()
+    #
+    def plot_logscale(self):
+        @ipywidgets.interact(key=self.select_key(), continuous_update=False)
+        def _plot_logscale(key):
+            sp = self.spectra[key]
+            sp.plot_logscale()
+    #
     def plot_egor(self, W, S):
         @ipywidgets.interact(key=self.select_key(), continuous_update=False)
         def _plot_egor2(key):
@@ -1970,6 +2286,12 @@ class SpectraCollection:
         def _plot_topf2(key):
             sp = self.spectra[key]
             sp.plot_topf(tval=tval, crop=crop, n_peaks=n_peaks)
+    #
+    def plot_sigma_mu(self, tau2_smooth=1.0, func=None, n_component=None):
+        @ipywidgets.interact(key=self.select_key(), continuous_update=False)
+        def _plot_topf2(key):
+            sp = self.spectra[key]
+            sp.plot_sigma_mu(tau2_smooth=tau2_smooth, func=func, n_component=n_component)
     #
     def topf(self, tval=0, crop=0, sub_bg=False, sub_valleys=True):
         col = SpectraCollection()
@@ -1993,11 +2315,15 @@ class SpectraCollection:
         for sp in self.spectra.values():
             sp.scale_by_mean(scale=scale)
     #
-    def plot_spectra(self, tau2_smooth=1.0, display_data=False):
+    def scale_by_max(self, scale=1.0):
+        for sp in self.spectra.values():
+            sp.scale_by_max(scale=scale)
+    #
+    def plot_spectra(self, tau2_smooth=1.0, display_data=False, n_component=None, noise_level=0.01):
         @ipywidgets.interact(key=self.select_key(), continuous_update=False)
         def _plot_current_spectra(key):
             sp = self.spectra[key]
-            sp.plot_spectra(tau2_smooth=tau2_smooth, display_data=display_data)
+            sp.plot_spectra(tau2_smooth=tau2_smooth, display_data=display_data, n_component=n_component, noise_level=noise_level)
     #
     def plot_pca_spectra(self):
         @ipywidgets.interact(key=self.select_key(), continuous_update=False)
@@ -2005,11 +2331,11 @@ class SpectraCollection:
             sp = self.spectra[key]
             sp.plot_pca_spectra()
     #
-    def select_for_exclusion(self):
+    def select_for_exclusion(self, sigma_mu=0.10, alpha=3.5, clear=False):
         @ipywidgets.interact(key=self.select_key(), continuous_update=False)
         def _plot_current_spectra(key):
             sp = self.spectra[key]
-            sp.select_for_exclusion()
+            sp.select_for_exclusion(sigma_mu=sigma_mu, alpha=alpha, clear=clear)
     #
     def exclude_selected(self):
         for sp in self.spectra.values():
@@ -2019,13 +2345,19 @@ class SpectraCollection:
         for sp in self.spectra.values():
             sp.exclude_by_default(sigma_mu=sigma_mu, alpha=alpha, clear=clear)
     #
-    def select_baselines(self, tau2=1000.0, tau2_smooth=1.0,
+    def plot_smoothed(self, tau2=1.0, func=funcs.Square(), func2=None, func2_e=None, xrange=None, d=2):
+        @ipywidgets.interact(key=self.select_key(), continuous_update=False)
+        def _plot_smoothed(key):
+            sp = self.spectra[key]
+            sp.plot_smoothed(tau2=tau2, func=func, func2=func2, func2_e=func2_e, xrange=xrange, d=d)
+    #
+    def select_baselines(self, tau2=1000.0, tau2_smooth=1.0, xrange=None,
                          func=funcs.Expit(-10.0), func2=None, func2_e=None,
                          d=2):
         @ipywidgets.interact(key=self.select_key(), continuous_update=False)
         def _select_baselines(key):
             sp = self.spectra[key]
-            sp.select_baselines(tau2=tau2, tau2_smooth=tau2_smooth, func=func, func2=func2, func2_e=func2_e, d=d)
+            sp.select_baselines(tau2=tau2, tau2_smooth=tau2_smooth, func=func, func2=func2, func2_e=func2_e, xrange=xrange, d=d)
     #
     def subtract_selected_baselines(self):
         for sp in self.spectra.values():

@@ -23,7 +23,7 @@ setup(
     packages = ['irsa', 'irsa.io', 
                 'irsa.spectra', 
                 'irsa.preprocess', 
-                'irsa.preprocess.despike', 'irsa.preprocess.smooth',
+                # 'irsa.preprocess.despike', 'irsa.preprocess.smooth',
                 'irsa.plots', 'irsa.widgets', 'irsa.analytics',
                ],
     # package_data = {'': ['*.pxd']},
