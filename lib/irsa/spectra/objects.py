@@ -1194,12 +1194,6 @@ class Spectra:
             self.y[k,:] = logscale(ys)
     #
     def loglog(self):
-        import matplotlib.pyplot as plt
-        import ipywidgets
-
-        i_slider = ipywidgets.IntSlider(min=0, max=len(self.y)-1)
-        i_slider.layout.width="50%"
-
         self.x = np.log(self.x)
         for k,ys in enumerate(self.y):
             self.y[k,:] = np.log(ys - ys.min() + 1)
@@ -1349,17 +1343,17 @@ class Spectra:
             plt.plot(xs, ys_i_smooth, linewidth=1.5, color='DarkBlue', label=f"current ({i})")
 
 
-            ss = np.mean(np.abs(ys_i_smooth))
+            # ss = np.mean(np.abs(ys_i_smooth))
 
             bs, dd = smooth.whittaker_smooth_weight_func2(
-                ys_i_smooth / ss,
+                ys_i_smooth,
                 func=func,
                 func2=func2,
                 func2_e=func2_e,
                 tau2=tau2,
                 d=d)
 
-            bs *= ss
+            # bs *= ss
             self.bs[i,:] = bs
             self.ys_bs[i,:] = self.y[i] - bs
 
