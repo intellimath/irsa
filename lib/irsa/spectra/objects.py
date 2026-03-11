@@ -58,7 +58,7 @@ def smooth_spectra(xs, ys, tau2=1.0, windows=None, beta=100, tune=True):
         ee = ys - ys_smooth
         ss = ee.std()
         if ss != 0:
-            ee /= ee.std()
+            ee /= ss
 
         W2 = np.exp(-0.5 * ee * ee)[1:-1]
         if windows is not None:
@@ -68,18 +68,19 @@ def smooth_spectra(xs, ys, tau2=1.0, windows=None, beta=100, tune=True):
     ys_smooth = smooth.whittaker_smooth(ys, tau2=tau2, W2=W2, d=2)
     return ys_smooth
 
-def smooth_pca(X, *, n_component=None):
+def smooth_pca(X0, *, n_component=None):
     from sklearn.decomposition import PCA, TruncatedSVD
 
-    m = X.shape[0]
-    X1 = np.zeros(m+10, "d")
-    X1[5:-5] = X
-    X1[:5] = X[0]
-    X1[-5:] = X[-1]
-    m1 = X1.shape[0]
-    Z = np.empty((m1,m1), "d")
-    for i in range(m1):
-        Z[i,:] = np.roll(X1, i)
+    m = X0.shape[0]
+    # I = X0.argsort()
+    # X1 = X0[I]
+    X1 = X0.copy()
+    gap = X1[-1] - X1[0]
+    trend = np.linspace(0, gap, m)
+    X = X1 - trend
+    Z = np.empty((m,m))
+    for i in range(m):
+        Z[i,:] = np.roll(X, i)
     pca = PCA(n_component)
     U = pca.fit_transform(Z)
     ratio = pca.explained_variance_ratio_.sum()
@@ -87,7 +88,36 @@ def smooth_pca(X, *, n_component=None):
     Z2 = pca.inverse_transform(U)
     for i in range(m):
         Z2[i,:] = np.roll(Z2[i], -i)
-    return Z2.mean(axis=0)[5:-5]
+    X1 = inventory.robust_mean_2d_t(Z2, 3.0)
+    # X1 = Z2.mean(axis=0)
+    X = X1 + trend
+    # ret = np.zeros_like(X0)
+    # ret[I] = X
+    return X
+
+def denoise(X, *, n_component=None):
+    from .denoise import Denoiser
+
+    if n_component is None:
+        m = X.shape[0]
+    else:
+        m = n_component
+    denoiser = Denoiser()
+    # gap = X[-1] - X[0]
+    return denoiser.denoise(X, m)
+
+def despike(X, tau=3.5):
+    S = np.array([min(x,y) for x,y in zip(abs(X[1:-1] - X[:-2]), abs(X[1:-1] - X[2:]))])
+    # S = abs(X[1:-1] - 0.5*(X[2:] + X[:-2]))
+    Z = inventory.modified_zscore(S)
+    mask1 = abs(Z) >= tau
+    mask2 = ((X[:-2] < X[1:-1]) & (X[1:-1] > X[2:])) | ((X[:-2] > X[1:-1]) & (X[1:-1] < X[2:]))
+    mask = mask1 & mask2
+    Y = X.copy()
+    for i,ma in enumerate(mask):
+        if ma:
+            Y[i+1] = (X[i] + X[i+2]) / 2
+    return Y
 
 class SpectraSeries:
     """
@@ -249,7 +279,8 @@ class SpectraSeries:
             sp = self[i]
             sp.replace_spectra_with_corrected()
     #
-    def plot_spectra(self, tau2_smooth=1.0, display_data=False, n_component=None, noise_level=0.01):
+    def plot_spectra(self, smoothing=True, kind="wh", tau2_smooth=1.0, display_data=False,
+                     n_component=None, noise_level=0.01, marker='s', ms=0, lw=0.25):
         import matplotlib.pyplot as plt
         import ipywidgets
 
@@ -259,7 +290,9 @@ class SpectraSeries:
         @ipywidgets.interact(i_series=i_series_slider, continuous_update=False)
         def _plot_spectra(i_series):
             sp = self[i_series]
-            sp.plot_spectra(tau2_smooth=tau2_smooth, display_data=display_data, n_component=n_component)
+            sp.plot_spectra(smoothing=smoothing, kind=kind, tau2_smooth=tau2_smooth,
+                            display_data=display_data, n_component=n_component,
+                            marker=marker, ms=ms, lw=lw)
     #
     def plot_pca_spectra(self, n_component=None):
         import matplotlib.pyplot as plt
@@ -429,7 +462,7 @@ class SpectraSeries:
             # plt.plot(xs, inventory.robust_mean_2d_t(Zs, 3.5), color="g", linewidth=1.5)
 
             plt.minorticks_on()
-            plt.show()      
+            plt.show()
     #
     def plot_logscale(self):
         import matplotlib.pyplot as plt
@@ -518,11 +551,12 @@ class SpectraSeries:
 
             plt.plot(xs, 0.5 + mu2_bl, color="Gray", alpha=0.5, label=r"$\mu/\mu_{\max} - \mu_{\text{bl}}$")
             mu2_bl_smoothed = smooth.whittaker_smooth(mu2_bl, tau2=tau2_smooth) #, W2=1+ss)
-            plt.plot(xs, 0.5 + mu2_bl_smoothed, color="k", alpha=0.75, label=r"$\mu/\mu_{\max} - \mu_{\text{bl}}$ (smoothed)")
+            plt.plot(xs, 0.5 + mu2_bl_smoothed, color="k", alpha=0.8, label=r"$\mu/\mu_{\max} - \mu_{\text{bl}}$ (smoothed)")
 
-            mu2_bl2 = smooth_pca(mu2_bl, n_component=n_component)
-            plt.plot(xs, 0.75 + mu2_bl, color="Gray", alpha=0.5)
-            plt.plot(xs, 0.75 + mu2_bl2, color="darkred", alpha=0.75, label=f"denoised")
+            # mu2_bl2 = smooth_pca(mu2_bl, n_component=n_component)
+            mu2_bl2 = denoise(mu2_bl, n_component=n_component)
+            plt.plot(xs, 0.75 + mu2_bl, color="Gray", marker='o', ms=1.0, alpha=0.5)
+            plt.plot(xs, 0.75 + mu2_bl2, color="darkred", alpha=0.8, label=f"denoised")
 
             plt.hlines([0.05,0.1,0.2,0.5,], min(xs), max(xs), colors='r', linewidths=0.25, linestyles="--")
             plt.minorticks_on()
@@ -559,6 +593,11 @@ class SpectraSeries:
             ys = Ys[k]
             for y in ys:
                 y[:] -= y.min()
+    #
+    def drop_notfinite(self):
+        Ys = self.y
+        for k in range(len(Ys)):
+            Ys[k] = np.array([y for y in Ys[k] if np.all(np.isfinite(y))])
     #
     def scale_pca(self):
         from np.linalg import det
@@ -780,7 +819,7 @@ class Spectra:
     def drop_zeros_spectrum(self):
         self.y = np.array([y for y in self.y if not np.all(y == 0)])
     #
-    def apply(self, func, inplace=True):
+    def apply(self, func, inplace=True, verbose=True):
         if not inplace:
             Ys = []
         x = self.x
@@ -790,7 +829,8 @@ class Spectra:
                 y[:] = y2
             else:
                 Ys.append(y)
-        print(self.key)
+        if verbose:
+            print(self.key)
         if not inplace:
             Ys = np.array(Ys)
             return Spectra(x, Ys, self.attrs)
@@ -962,6 +1002,36 @@ class Spectra:
             mu = inventory.robust_mean_1d(np.abs(ys), tau=tau)
             ys[:] = (ys / mu) * scale
             # err[:] = (err / mu) * scale
+    #
+    def scale_by_robust_zscore(self, tau=3.5, scale=1.0):
+        N = len(self.y)
+        for k in range(N):
+            ys = self.y[k]
+            # err = self.stderr[k]
+            mu = inventory.robust_mean_1d(ys, tau=tau)
+            absdev = abs(ys - mu)
+            sigma = inventory.robust_mean_1d(absdev, tau=tau)
+            ys[:] = scale * (ys - mu) / sigma
+    #
+    def scale_by_zscore(self, scale=1.0):
+        N = len(self.y)
+        for k in range(N):
+            ys = self.y[k]
+            # err = self.stderr[k]
+            mu = ys.mean()
+            absdev = abs(ys - mu)
+            sigma = absdev.std()
+            ys[:] = scale * (ys - mu) / sigma
+    #
+    def scale_by_modified_zscore(self, tau=3.5, scale=1.0):
+        N = len(self.y)
+        for k in range(N):
+            ys = self.y[k]
+            # err = self.stderr[k]
+            mu = np.median(ys)
+            absdev = abs(ys - mu)
+            sigma = np.mean(absdev)
+            ys[:] = scale * 0.6748 * (ys - mu) / sigma
     #
     def scale_by_max(self, scale=1.0):
         N = len(self.y)
@@ -1339,7 +1409,7 @@ class Spectra:
                 # plt.plot(xs, ys_i_smooth, linewidth=1.5, color='DarkGreen', label=f"current smoothed ({i})")
             else:
                 ys_i_smooth =  ys_i
-            
+
             plt.plot(xs, ys_i_smooth, linewidth=1.5, color='DarkBlue', label=f"current ({i})")
 
 
@@ -1624,6 +1694,7 @@ class Spectra:
         for i in range(self.y.shape[0]):
             self.y[i,:] = self.ys_bs[i]
         self.bs.fill(0)
+        
         self.ys_bs.fill(0)
         self.tau2_mean=0
         self.tau2_values.fill(0)
@@ -1823,8 +1894,9 @@ class Spectra:
             # # plt.xlim(x_min, x_max)
             plt.show()
     #
-    def plot_spectra(self, smoothing=True, tau2_smooth=1, beta=100, display_data=False, n_component=None, **kwargs):
-        from sklearn.decomposition import PCA, TruncatedSVD
+    def plot_spectra(self, smoothing=True, kind="wh", tau2_smooth=1, beta=100, display_data=False,
+                     n_component=None, marker='s', ms=0, lw=0.5, **kwargs):
+        # from sklearn.decomposition import PCA, TruncatedSVD
 
         i_slider = ipywidgets.IntSlider(min=0, max=len(self.y)-1, description="i")
         i_slider.layout.width="50%"
@@ -1846,7 +1918,7 @@ class Spectra:
             plt.title(self.attrs["key"], fontdict={"size":10}, loc="left")
             xs = self.x
             for ys in self.y:
-                plt.plot(xs, ys, linewidth=0.25, alpha=0.25)
+                plt.plot(xs, ys, linewidth=lw, alpha=0.25, marker=marker, ms=ms)
 
             ys_i = self.y[i]
             plt.plot(xs, ys_i, linewidth=1.0, color='DarkBlue', label="current", alpha=0.5)
@@ -1854,20 +1926,64 @@ class Spectra:
                 for xi,yi in zip(self.y[i], self.x):
                     print(f"{xi:.2f} {yi:.2f}")
 
-            # if smoothing and tau2_smooth > 0:
-            #     ys_i_smooth = smooth_spectra(xs, ys_i, tau2=tau2_smooth, windows=self.windows, beta=beta, )
-            #     plt.plot(xs, ys_i_smooth, linewidth=2.0, color='DarkRed',
-            #              label="smoothed")
-            # else:
-            #     y_i_smooth = ys_i
-            ys_i_smooth = smooth_pca(ys_i, n_component=n_component)
-            plt.plot(xs, ys_i_smooth, linewidth=1.0, color='DarkRed', label=f"smoothed")
+            if smoothing and tau2_smooth > 0:
+                if kind == "wh":
+                    ys_i_smooth = smooth_spectra(xs, ys_i, tau2=tau2_smooth, windows=self.windows, beta=beta, )
+                elif kind == "pca":
+                    ys_i_smooth = smooth_pca(ys_i, n_component=n_component)
+                elif kind == "denoise":
+                    ys_i_smooth = denoise(ys_i, n_component=n_component)
+                else:
+                    ys_i_smooth = ys_i
+                plt.plot(xs, ys_i_smooth, linewidth=1.0, color='DarkRed', label=f"smoothed")
+            else:
+                ys_i_smooth = ys_i
 
             x_min, x_max = xrange
             ys_range = ys_i[(x_min <= xs) & (xs <= x_max)]
             ymin, y_max = 0.9*np.min(ys_range), 1.2*np.max(ys_range)
             plt.ylim(ymin, y_max)
 
+            plt.grid(ls=':', lw=0.75)
+            plt.minorticks_on()
+            plt.tight_layout()
+            plt.xlim(x_min, x_max)
+            plt.legend()
+            plt.show()
+    #
+    def plot_mu_sigma(self, alpha=1.0):
+        # from sklearn.decomposition import PCA, TruncatedSVD
+
+        xrange_slider = ipywidgets.FloatRangeSlider(
+            value=(min(self.x), max(self.x)),
+            min=min(self.x),
+            max=max(self.x),
+            description="xrange",)
+        xrange_slider.layout.width="50%"
+
+        @ipywidgets.interact(xrange=xrange_slider, continuous_update=False)
+        def _plot_mu_sigma(xrange):
+            fig = plt.figure("_plot_mu_sigma", figsize=(12,4.5))
+            fig.canvas.header_visible = False
+            fig.canvas.footer_visible = False
+            fig.canvas.toolbar_position = 'right'
+            fig.clear()
+            plt.title(self.attrs["key"], fontdict={"size":10}, loc="left")
+            xs = self.x
+            for ys in self.y:
+                plt.plot(xs, ys, lw=0.25, alpha=0.5)
+
+            mu = self.y.mean(axis=0)
+            sigma = self.y.std(axis=0)
+            plt.plot(xs, mu, lw=1.5, color='k')
+            plt.fill_between(xs, mu - alpha*sigma, mu + alpha*sigma, color='lightblue', alpha=0.75, label=r'$\bar\sigma/\bar\mu$='+f"{(sigma/mu).mean():.2f}")
+
+            x_min, x_max = xrange
+            # ys_range = ys_i[(x_min <= xs) & (xs <= x_max)]
+            # ymin, y_max = 0.9*np.min(ys_range), 1.2*np.max(ys_range)
+            # plt.ylim(ymin, y_max)
+
+            plt.grid(ls=':', lw=0.75)
             plt.minorticks_on()
             plt.tight_layout()
             plt.xlim(x_min, x_max)
@@ -2204,30 +2320,27 @@ class SpectraCollection:
 
         return wg_select
     #
-    def apply(self, func, inplace=True):
+    def apply(self, func, inplace=True, verbose=True):
         if inplace:
             for key, sp in self.spectra.items():
-                print(key)
-                sp.apply(func, inplace=True)
+                sp.apply(func, inplace=True, verbose=verbose)
         else:
             col = SpectraCollection()
             for key, sp in self.spectra.items():
-                print(key)
-                sp2 = sp.apply(func, inplace=False)
+                sp2 = sp.apply(func, inplace=False, verbose=verbose)
                 col[key] = sp2
             return col
     #
-    def apply_par(self, func, inplace=True):
+    def apply_par(self, func, inplace=True, verbose=True):
         from joblib import Parallel, delayed
         if inplace:
             Parallel(n_job=-1, backend="loky")(
-                delayed(sp.apply)(func, inplace=True) for key, sp in self.spectra.items()
+                delayed(sp.apply)(func, inplace=True, verbose=verbose) for key, sp in self.spectra.items()
             )
         else:
             col = SpectraCollection()
             for key, sp in self.spectra.items():
-                print(key)
-                sp2 = sp.apply(func, inplace=False)
+                sp2 = sp.apply(func, inplace=False, verbose=verbose)
                 col[key] = sp2
             return col
     #
@@ -2246,6 +2359,15 @@ class SpectraCollection:
     def drop_zeros_spectrum(self):
         for sp in self.spectra.values():
             sp.drop_zeros_spectrum()
+    #
+    def drop_empty(self):
+        empty_keys = []
+        for key in self.spectra.keys():
+            sp = self.spectra[key]
+            if len(sp.y) == 0:
+                empty_keys.append(key)
+        for key in empty_keys:
+            del self.spectra[key]
     #
     def derivative(self):
         for sp in self.spectra.values():
@@ -2313,11 +2435,32 @@ class SpectraCollection:
         for sp in self.spectra.values():
             sp.scale_by_max(scale=scale)
     #
-    def plot_spectra(self, tau2_smooth=1.0, display_data=False, n_component=None, noise_level=0.01):
+    def scale_by_zscore(self,scale=1.0):
+        for sp in self.spectra.values():
+            sp.scale_by_zscore(scale=scale)
+    #
+    def scale_by_modified_zscore(self, tau=3.5, scale=1.0):
+        for sp in self.spectra.values():
+            sp.scale_by_modified_zscore(tau=tau, scale=scale)
+    #
+    def scale_by_robust_zscore(self, tau=3.5, scale=1.0):
+        for sp in self.spectra.values():
+            sp.scale_by_robust_zscore(tau=tau, scale=scale)
+    #
+    def plot_spectra(self, smoothing=True, kind="wh", tau2_smooth=1.0, display_data=False,
+                     n_component=None, noise_level=0.01, marker='s', ms=0, lw=0.25):
         @ipywidgets.interact(key=self.select_key(), continuous_update=False)
         def _plot_current_spectra(key):
             sp = self.spectra[key]
-            sp.plot_spectra(tau2_smooth=tau2_smooth, display_data=display_data, n_component=n_component, noise_level=noise_level)
+            sp.plot_spectra(smoothing=smoothing, kind=kind, tau2_smooth=tau2_smooth,
+                            display_data=display_data, n_component=n_component,
+                            noise_level=noise_level, marker=marker, ms=ms, lw=lw)
+    #
+    def plot_mu_sigma(self, alpha=2.0):
+        @ipywidgets.interact(key=self.select_key(), continuous_update=False)
+        def _plot_mu_sigma(key):
+            sp = self.spectra[key]
+            sp.plot_mu_sigma(alpha=alpha)
     #
     def plot_pca_spectra(self):
         @ipywidgets.interact(key=self.select_key(), continuous_update=False)
