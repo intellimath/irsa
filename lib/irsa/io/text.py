@@ -6,11 +6,12 @@ from irsa.spectra import SpectraSeries, Spectra, SpectraCollection
 # from recordclass import make_dataclass
 
 _default_keys = [
-    'дата',
     'вид_бактерий', 'штамм_бактерий',
-    'резистентность', 
+    'резистентность',
     'номер_цикла', 'номер_эксперимента_в_цикле',
-    'номер_повтора', 'капля',  'отсечки_по_молекулярной_массе',
+    'номер_повтора', 'капля',
+    'дата',
+    'отсечки_по_молекулярной_массе',
     'тип_измерения_спектров', "место",
     'начальная_концентрация_клеток_в_пробе', 'номер_подложки',
     'вода', 'отмывка_фильтров',
@@ -46,8 +47,7 @@ def parse_file_name(fname, attr_names):
 #         for entry in os.scandir(f"{root}/root_entry.name"):
 #             if not entry.is_dir():
 #                 continue
-        
-        
+
 # SpectraAttrs = make_dataclass(
 #     "SpectraAttrs", 
 #     "date cls subcls resistance n_cycle n_try n_retry concentration wave_length laser_intensity series comment")
@@ -67,13 +67,13 @@ def read_spectra_attrs(dirname):
         if ":" not in line:
             raise ValueError("В строке отсутствует ':'")
         name, value = line.split(":")
-        
+
         name = name.strip()
         if "  " in name:
             name = name.replace("  ", " ")
         if " " in name:
             name = name.replace(" ", "_")
-        
+
         value = value.strip()
         if value == "no_date":
             value = ""
@@ -90,17 +90,17 @@ def write_spectra_attrs(dirname, attrs):
         fd.write(f"{key}: {val}\n")
     fd.close()
 
-def load_txt_spectra(path, delimiter="\t", skiprows=0):  
+def load_txt_spectra(path, delimiter="\t", skiprows=0):
     xy = np.loadtxt(path, delimiter=delimiter, skiprows=skiprows)
 
     x = xy[:,0]
     ys = xy[:,1:]
-    
+
     if ys.shape[1] == 1:
         ys = np.ascontiguousarray(ys[:,0])
     elif ys.shape[1] > 1:
         ys = np.ascontiguousarray(ys.T)
-    
+
     x = np.ascontiguousarray(x)
 
     return x, ys
@@ -180,52 +180,6 @@ def load_spectra(root, options, clear=True, skiprows=0, verbose=True):
 
     return SpectraCollection(dd)
 
-# def load_spectra(root, options, clear=True, skiprows=0):
-#     import os
-
-#     # if clear:
-#     #     dd.clear()
-#     dd = {}
-#     for entry in os.scandir(root):
-#         if not entry.is_dir():
-#             continue
-
-#         dirname = entry.name
-#         # print(dirname)
-#         dirpath = f"{root}/{dirname}"
-
-#         ret = load_experiment_spectra_all(dirpath, options, skiprows=skiprows)
-
-#         for key in ret:
-#             dd[key] = ret[key]
-#         # dd.update(ret)
-
-#     return SpectraCollection(dd)
-
-# def load_experiment_spectra_all(root, options=None, skiprows=0):
-#     dd = {}
-#     for entry in os.scandir(root):
-#         if not entry.is_dir():
-#             continue
-
-#         dirname = entry.name
-#         # print("\t", dirname)
-#         dirpath = f"{root}/{dirname}"
-
-#         spectra = load_experiment_spectra(dirpath, options, skiprows=skiprows)
-#         if spectra is None:
-#             continue
-
-#         attrs = spectra.attrs
-#         attr_names = _default_keys
-#         key = "_".join(
-#             attrs[k] for k in attr_names if k in attrs)
-#         dd[key] = spectra
-#         spectra.attrs["key"] = key
-#         spectra.attrs["source"] = root
-
-#     return SpectraCollection(dd)
-
 def load_experiment_spectra(dirpath, options=None, skiprows=0, verbose=True):
     attrs = read_spectra_attrs(dirpath)
 
@@ -240,7 +194,6 @@ def load_experiment_spectra(dirpath, options=None, skiprows=0, verbose=True):
         return None
 
     Xs, Ys = load_txt_dir(dirpath, skiprows=skiprows)
-    # print(len(Xs), len(Ys))
     if verbose:
         print("ok:", dirpath)
     # print(os.path.split(dirpath)[-1], Xs[0].shape, Ys[0].shape, {k:v for k,v in attrs.items() if k in options})

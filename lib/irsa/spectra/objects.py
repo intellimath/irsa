@@ -58,7 +58,7 @@ def smooth_spectra(xs, ys, tau2=1.0, windows=None, beta=100, tune=True):
         ee = ys - ys_smooth
         ss = ee.std()
         if ss != 0:
-            ee /= ss
+            ee = (ee - ee.mean()) / ss
 
         W2 = np.exp(-0.5 * ee * ee)[1:-1]
         if windows is not None:
@@ -68,12 +68,26 @@ def smooth_spectra(xs, ys, tau2=1.0, windows=None, beta=100, tune=True):
     ys_smooth = smooth.whittaker_smooth(ys, tau2=tau2, W2=W2, d=2)
     return ys_smooth
 
+def explained_variance_ratio(X0, *, n_component=None):
+    from sklearn.decomposition import PCA, TruncatedSVD
+
+    m = X0.shape[0]
+    X1 = X0.copy()
+    gap = X1[-1] - X1[0]
+    trend = np.linspace(0, gap, m)
+    X = X1 - trend
+    Z = np.empty((m,m))
+    for i in range(m):
+        Z[i,:] = np.roll(X, i)
+    pca = PCA(n_component)
+    U = pca.fit_transform(Z)
+    ratio = np.array(pca.explained_variance_ratio_)
+    return ratio
+
 def smooth_pca(X0, *, n_component=None):
     from sklearn.decomposition import PCA, TruncatedSVD
 
     m = X0.shape[0]
-    # I = X0.argsort()
-    # X1 = X0[I]
     X1 = X0.copy()
     gap = X1[-1] - X1[0]
     trend = np.linspace(0, gap, m)
@@ -99,7 +113,7 @@ def denoise(X, *, n_component=None):
     from .denoise import Denoiser
 
     if n_component is None:
-        m = X.shape[0]
+        m = X.shape[0] // 2
     else:
         m = n_component
     denoiser = Denoiser()
@@ -107,17 +121,32 @@ def denoise(X, *, n_component=None):
     return denoiser.denoise(X, m)
 
 def despike(X, tau=3.5):
-    S = np.array([min(x,y) for x,y in zip(abs(X[1:-1] - X[:-2]), abs(X[1:-1] - X[2:]))])
-    # S = abs(X[1:-1] - 0.5*(X[2:] + X[:-2]))
+    X11 = X[1:-1]
+    X02 = X[:-2]
+    X20 = X[2:]
+    S = np.fromiter((min(x,y) for x,y in zip(abs(X11 - X02), abs(X11 - X20))), "d", len(X)-2)
     Z = inventory.modified_zscore(S)
     mask1 = abs(Z) >= tau
-    mask2 = ((X[:-2] < X[1:-1]) & (X[1:-1] > X[2:])) | ((X[:-2] > X[1:-1]) & (X[1:-1] < X[2:]))
+    mask2 = ((X02 < X11) & (X11 > X20)) | ((X02 > X11) & (X11 < X20))
     mask = mask1 & mask2
     Y = X.copy()
     for i,ma in enumerate(mask):
         if ma:
             Y[i+1] = (X[i] + X[i+2]) / 2
     return Y
+
+def despiking(X, tau=2.0):
+    t = 3.5
+    while t >= tau:
+        while True:
+            X1 = despike(X, t)
+            if (X1 != X).sum() == 0:
+                X = X1
+                break
+            X = X1
+        t -= 0.1
+        t = round(t, 1)
+    return X
 
 class SpectraSeries:
     """
@@ -181,7 +210,7 @@ class SpectraSeries:
             else:
                 if i in self.excludes:
                     self.excludes.remove(i)
-        
+
         i_slider.on_trait_change(i_on_value_change, name="value")
         b_exclude.on_trait_change(b_on_value_change, name="value")
 
@@ -202,7 +231,7 @@ class SpectraSeries:
             sigma = np.sqrt(inventory.robust_mean_2d_t((Ys - mu)**2, tau=alpha))
             if (sigma == 0).sum() == 0:
                 ss = sigma / mu
-    
+
                 plt.fill_between(xs, mu-2*sigma, mu+2*sigma, alpha=0.5, 
                                  label=fr"$\sigma/\mu={ss.mean():.3f}\pm{ss.std():.3f}$")
             
@@ -279,8 +308,8 @@ class SpectraSeries:
             sp = self[i]
             sp.replace_spectra_with_corrected()
     #
-    def plot_spectra(self, smoothing=True, kind="wh", tau2_smooth=1.0, display_data=False,
-                     n_component=None, noise_level=0.01, marker='s', ms=0, lw=0.25):
+    def plot_spectra(self, smoothing=False, kind="wh", display_data=False,
+                     marker='s', ms=0, lw=0.25, **kwds):
         import matplotlib.pyplot as plt
         import ipywidgets
 
@@ -290,17 +319,16 @@ class SpectraSeries:
         @ipywidgets.interact(i_series=i_series_slider, continuous_update=False)
         def _plot_spectra(i_series):
             sp = self[i_series]
-            sp.plot_spectra(smoothing=smoothing, kind=kind, tau2_smooth=tau2_smooth,
-                            display_data=display_data, n_component=n_component,
-                            marker=marker, ms=ms, lw=lw)
+            sp.plot_spectra(smoothing=smoothing, kind=kind, display_data=display_data, 
+                            marker=marker, ms=ms, lw=lw, **kwds)
     #
     def plot_pca_spectra(self, n_component=None):
         import matplotlib.pyplot as plt
         import ipywidgets
-        
+
         i_slider = ipywidgets.IntSlider(min=0, max=len(self.y)-1)
         i_slider.layout.width="50%"
-        
+
         xrange_slider = ipywidgets.IntRangeSlider(
             value=(min(self.x[0]), max(self.x[0])), 
             min=min(self.x[0]), 
@@ -326,7 +354,7 @@ class SpectraSeries:
                 n_component = Ys.shape[0]
             c, As, Ls = pca.find_loc_and_pc(Ys2, n_component)
             print(Ls/Ls.sum())
-            print(As)
+            # print(As)
             plt.subplot(1,2,1)
             plt.title(f"{self.key} ({len(self.y[i])} spectra)")
             plt.minorticks_on()
@@ -341,7 +369,7 @@ class SpectraSeries:
             # i0, i1 = min(ix_range), max(ix_range)
             # plt.legend()
             plt.tight_layout()
-            plt.show()            
+            plt.show()
     #
     def crop(self, start_x, end_x=None):
         Xs = self.x
@@ -532,7 +560,7 @@ class SpectraSeries:
             sigma = inventory.robust_mean_2d_t(abs(Ys - mu), 3.5)
             mu2 = mu/max(mu)
 
-            bl, __ = smooth.whittaker_smooth_weight_func2(
+            bl = smooth.whittaker_smooth(
                 mu2,
                 func=func,
                 func2_e=None, #inventory.relative_abs_max,
@@ -665,7 +693,7 @@ class SpectraSeries:
         for k in range(len(Ys)):
             ys = Ys[k]
             for y in ys:
-                y[:] = smooth.whittaker_smooth_func2(y, W2=W2, tau=tau, d=2)[0]
+                y[:] = smooth.whittaker_smooth(y, W2=W2, tau=tau, d=2)[0]
     #
     def remove_overflow_spectra(self, y_max=2000.0, y_max_count=10):
         Xs, Ys = self.x, self.y
@@ -736,7 +764,12 @@ class SpectraSeries:
         Ys = [Ys[k] for k in ids]
         Xs = [Xs[k] for k in ids]
         self.x, self.y = Xs, Ys
-    #    
+    #
+    def despike(self, tau=2.0):
+        for ys in self.y:
+            for y in ys:
+                y[:] = despiking(y, tau)
+    #
     def robust_averaging(self, tau=3.0):
         if len(self.y[0].shape) == 1:
             raise TypeError("Усреднять можно только в сериях")
@@ -819,7 +852,7 @@ class Spectra:
     def drop_zeros_spectrum(self):
         self.y = np.array([y for y in self.y if not np.all(y == 0)])
     #
-    def apply(self, func, inplace=True, verbose=True):
+    def apply(self, func, inplace=True):
         if not inplace:
             Ys = []
         x = self.x
@@ -829,8 +862,6 @@ class Spectra:
                 y[:] = y2
             else:
                 Ys.append(y)
-        if verbose:
-            print(self.key)
         if not inplace:
             Ys = np.array(Ys)
             return Spectra(x, Ys, self.attrs)
@@ -868,7 +899,7 @@ class Spectra:
     #         # ys /= np.mean(ys)
     #         ys *= len
     # #
-    def select_for_exclusion(self, clear=False):
+    def select_for_exclusion(self, sigma_mu=None, alpha=None, clear=False):
 
         if self.excludes and clear:
             self.excludes = []
@@ -935,6 +966,25 @@ class Spectra:
         self.y = [self.y[i] for i in range(N) if i not in self.excludes]
 
         self.excludes = []
+    #
+    def exclude_by_default(self, sigma_mu=None, alpha=3.5, clear=False):
+        import matplotlib.pyplot as plt
+        import ipywidgets
+
+        N = len(self.y)
+        if self.excludes and clear:
+            self.excludes = []
+        if not self.excludes:
+            y = self.y
+            mu = inventory.robust_mean_2d_t(y, tau=alpha)
+            std = np.sqrt(inventory.robust_mean_2d_t((y - mu)**2, tau=alpha))
+            z = (y - mu) / std
+            zm =  abs(z).mean(axis=1)
+            for i,v in enumerate(zm):
+                if v > 3.0:
+                    self.excludes.append(i)
+
+        self.exclude_selected()
     #
     def select_windows(self, windows=None):
         import matplotlib.pyplot as plt
@@ -1112,7 +1162,7 @@ class Spectra:
                 else:
                     smooth_func2 = func2
 
-                ys[:], _ = smooth.whittaker_smooth_weight_func2(
+                ys[:] = smooth.whittaker_smooth(
                                 ys, tau2=tau2,
                                 func=func,
                                 func2=smooth_func2)
@@ -1230,7 +1280,7 @@ class Spectra:
 
             plt.plot(xs, ys_i, linewidth=1.0, color='DarkBlue', marker='o', ms=2, label=f"current ({i})")
 
-            ys_sm, dd = smooth.whittaker_smooth_weight_func2(
+            ys_sm = smooth.whittaker_smooth(
                 ys_i,
                 func=func,
                 func2=func2,
@@ -1561,7 +1611,7 @@ class Spectra:
                     sigma = abs(self.Ys[i] - Ys_smooth[i]).mean()
                     func = funcs.Step(sigma)
 
-                bs, _ = smooth.whittaker_smooth_weight_func2(
+                bs = smooth.whittaker_smooth(
                     Ys_smooth[i],
                     func=func,
                     func2=func2,
@@ -1630,7 +1680,7 @@ class Spectra:
 #             elif kind == "irsa":
 #                 func = kwargs["func"]
 #                 func2 = kwargs["func2"]
-#                 bs, _ = smooth.+whittaker_smooth_weight_func2(
+#                 bs = smooth.whittaker_smooth(
 #                             ys,
 #                             func=func,
 #                             func2=func2,
@@ -1673,7 +1723,7 @@ class Spectra:
                 sigma = abs(ys_i - ys_smooth).mean()
                 func = funcs.Step(sigma)
 
-            bs, _ = smooth.whittaker_smooth_weight_func2(
+            bs = smooth.whittaker_smooth(
                 ys_smooth,
                 func=func,
                 func2=func2,
@@ -1894,8 +1944,8 @@ class Spectra:
             # # plt.xlim(x_min, x_max)
             plt.show()
     #
-    def plot_spectra(self, smoothing=True, kind="wh", tau2_smooth=1, beta=100, display_data=False,
-                     n_component=None, marker='s', ms=0, lw=0.5, **kwargs):
+    def plot_spectra(self, smoothing=False, kind="wh", display_data=False,
+                     marker='s', ms=0, lw=0.5, **kwds):
         # from sklearn.decomposition import PCA, TruncatedSVD
 
         i_slider = ipywidgets.IntSlider(min=0, max=len(self.y)-1, description="i")
@@ -1921,18 +1971,28 @@ class Spectra:
                 plt.plot(xs, ys, linewidth=lw, alpha=0.25, marker=marker, ms=ms)
 
             ys_i = self.y[i]
-            plt.plot(xs, ys_i, linewidth=1.0, color='DarkBlue', label="current", alpha=0.5)
+            if smoothing:
+                plt.plot(xs, ys_i, linewidth=1.0, color='DarkBlue', label="current", alpha=0.5)
+            else:
+                plt.plot(xs, ys_i, linewidth=1.0, color='DarkBlue', label="current")
             if display_data:
                 for xi,yi in zip(self.y[i], self.x):
                     print(f"{xi:.2f} {yi:.2f}")
 
-            if smoothing and tau2_smooth > 0:
+            if smoothing:
                 if kind == "wh":
-                    ys_i_smooth = smooth_spectra(xs, ys_i, tau2=tau2_smooth, windows=self.windows, beta=beta, )
+                    tau2 = kwds.get("tau2", 1.0)
+                    beta = kwds.get("beta", 100)
+                    ys_i_smooth = smooth_spectra(xs, ys_i, tau2=tau2, windows=self.windows, beta=beta, )
                 elif kind == "pca":
+                    n_component = kwds.get("n_component", None)
                     ys_i_smooth = smooth_pca(ys_i, n_component=n_component)
                 elif kind == "denoise":
+                    n_component = kwds.get("n_component", None)
                     ys_i_smooth = denoise(ys_i, n_component=n_component)
+                elif kind == "despike":
+                    tau = kwds.get("tau", 3.5)
+                    ys_i_smooth = despiking(ys_i, tau=tau)
                 else:
                     ys_i_smooth = ys_i
                 plt.plot(xs, ys_i_smooth, linewidth=1.0, color='DarkRed', label=f"smoothed")
@@ -1976,7 +2036,7 @@ class Spectra:
             mu = self.y.mean(axis=0)
             sigma = self.y.std(axis=0)
             plt.plot(xs, mu, lw=1.5, color='k')
-            plt.fill_between(xs, mu - alpha*sigma, mu + alpha*sigma, color='lightblue', alpha=0.75, label=r'$\bar\sigma/\bar\mu$='+f"{(sigma/mu).mean():.2f}")
+            plt.fill_between(xs, mu - alpha*sigma, mu + alpha*sigma, color='lightblue', alpha=0.75, label=r'$\bar\sigma/\bar\mu$='+f"{abs(sigma/mu).mean():.2f}")
 
             x_min, x_max = xrange
             # ys_range = ys_i[(x_min <= xs) & (xs <= x_max)]
@@ -2221,7 +2281,7 @@ class SpectraCollection:
         if spectra is None:
             self.spectra = {}
         else:
-            self.spectra = spectra
+            self.spectra = {key:spectra[key] for key in sorted(spectra.keys())}
         self.wg_select_key = None
         self.current_key = None
 
@@ -2253,6 +2313,13 @@ class SpectraCollection:
             if sp.attrs[name] == val:
                 yield sp
     #
+    def subcollection_by_attr_value(self, name, val):
+        col = SpectraCollection()
+        for key, sp in self.spectra.items():
+            if sp.attrs[name] == val:
+                col.spectra[key] = sp
+        return col
+    #
     def filter(self, **kwds):
         kwds_items = list(kwds.items())
         for sp in self.spectra.values():
@@ -2265,7 +2332,7 @@ class SpectraCollection:
             if flag:
                 yield sp
     #
-    def union(self, **kwds):
+    def union(self, key=None, **kwds):
         ys_list = []
         xs = None
         for sp in self.filter(**kwds):
@@ -2278,8 +2345,24 @@ class SpectraCollection:
 
         attrs = {name:val for name,val in kwds.items()}
         sp = Spectra(xs, ys, attrs)
-        sp.attrs["key"] = "_".join(kwds.values())
+        if key is None:
+            sp.attrs["key"] = "_".join(kwds.values())
+        else:
+            sp.attrs["key"] = key
         return sp
+    #
+    def group_by(self, name, val):
+        d = {}
+        for sp in self.spectra.values():
+            if attrs[name] == val:
+                col = d.get(val, None)
+                if col is None:
+                    col = SpectraCollection()
+                    col.key = val
+                    col.attrs={k:v for k,v in sp.attrs.items() if k != name}
+                    d[val] = col
+                col.spectra[sp.key] = sp
+        return d
     #
     def same_x(self):
         xs = None
@@ -2291,8 +2374,8 @@ class SpectraCollection:
         return xs
     #
     def union_y(self):
-        ys_list = [sp.y for sp in self.spectra.values()]
-        ys = np.vstack(ys_list)
+        ys_tuple = tuple(sp.y for sp in self.spectra.values())
+        ys = np.vstack(ys_tuple)
         return ys
     #
     def _intersect_attrs(self):
@@ -2321,14 +2404,25 @@ class SpectraCollection:
         return wg_select
     #
     def apply(self, func, inplace=True, verbose=True):
+        if verbose:
+            twg = ipywidgets.Text(value="")
+            display(twg)
         if inplace:
             for key, sp in self.spectra.items():
-                sp.apply(func, inplace=True, verbose=verbose)
+                if verbose:
+                    twg.value = key
+                sp.apply(func, inplace=True)
+            if verbose:
+                twg.value = "OK"
         else:
             col = SpectraCollection()
             for key, sp in self.spectra.items():
-                sp2 = sp.apply(func, inplace=False, verbose=verbose)
+                if verbose:
+                    twg.value = key
+                sp2 = sp.apply(func, inplace=False)
                 col[key] = sp2
+            if verbose:
+                twg.value = "OK"
             return col
     #
     def apply_par(self, func, inplace=True, verbose=True):
@@ -2381,7 +2475,7 @@ class SpectraCollection:
     #
     def loglog(self):
         @ipywidgets.interact(key=self.select_key(), continuous_update=False)
-        def _plot_logscale(key):
+        def _logscale(key):
             sp = self.spectra[key]
             sp.loglog()
     #
@@ -2447,14 +2541,13 @@ class SpectraCollection:
         for sp in self.spectra.values():
             sp.scale_by_robust_zscore(tau=tau, scale=scale)
     #
-    def plot_spectra(self, smoothing=True, kind="wh", tau2_smooth=1.0, display_data=False,
-                     n_component=None, noise_level=0.01, marker='s', ms=0, lw=0.25):
+    def plot_spectra(self, smoothing=False, kind="wh", display_data=False,
+                     marker='s', ms=0, lw=0.25, **kwds):
         @ipywidgets.interact(key=self.select_key(), continuous_update=False)
         def _plot_current_spectra(key):
             sp = self.spectra[key]
-            sp.plot_spectra(smoothing=smoothing, kind=kind, tau2_smooth=tau2_smooth,
-                            display_data=display_data, n_component=n_component,
-                            noise_level=noise_level, marker=marker, ms=ms, lw=lw)
+            sp.plot_spectra(smoothing=smoothing, kind=kind, display_data=display_data,
+                            marker=marker, ms=ms, lw=lw, **kwds)
     #
     def plot_mu_sigma(self, alpha=2.0):
         @ipywidgets.interact(key=self.select_key(), continuous_update=False)
@@ -2462,11 +2555,11 @@ class SpectraCollection:
             sp = self.spectra[key]
             sp.plot_mu_sigma(alpha=alpha)
     #
-    def plot_pca_spectra(self):
+    def plot_pca_spectra(self, n_component=None):
         @ipywidgets.interact(key=self.select_key(), continuous_update=False)
         def _plot_current_pca_spectra(key):
             sp = self.spectra[key]
-            sp.plot_pca_spectra()
+            sp.plot_pca_spectra(n_component=n_component)
     #
     def select_for_exclusion(self, sigma_mu=0.10, alpha=3.5, clear=False):
         @ipywidgets.interact(key=self.select_key(), continuous_update=False)
