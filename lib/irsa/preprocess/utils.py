@@ -66,9 +66,9 @@ def mark_outliers2(yy, tau=3.5, mean=np.median, std=np.median, marker=np.nan, _n
     mu = mean(yy, axis=0)
     sigma = std(abs(yy - mu)) / 0.67449
     mask = (yy > (mu + tau*sigma)) | (yy < (mu - tau*sigma))
-    
+
     indexes = _nonzero(mask)
-    
+
     for i,j in zip(*indexes):
         yy[i,j] = marker
 
@@ -81,3 +81,4 @@ def replace_outliers2(yy, tau=3.5, mean=np.median, std=np.median, _nonzero=np.no
     
     for i,j in zip(*indexes):
         yy[i,j] = mu[j]
+

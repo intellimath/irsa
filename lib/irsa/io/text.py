@@ -162,7 +162,7 @@ def correct_attrs_with_places(root):
         print(f"remove attrs from {dirpath}")
         os.remove(f"{dirpath}/attrs.txt")
 
-def load_spectra(root, options, clear=True, skiprows=0, verbose=True):
+def load_spectra(root, options, clear=True, skiprows=0, verbose=False):
     dd = {}
     list_path = list(iter_dir_with_spectra(root))
     for dirpath in list_path:
@@ -181,7 +181,7 @@ def load_spectra(root, options, clear=True, skiprows=0, verbose=True):
 
     return SpectraCollection(dd)
 
-def load_experiment_spectra(dirpath, options=None, skiprows=0, verbose=True):
+def load_experiment_spectra(dirpath, options=None, skiprows=0, verbose=False):
     attrs = read_spectra_attrs(dirpath)
 
     is_ok = True
@@ -202,7 +202,7 @@ def load_experiment_spectra(dirpath, options=None, skiprows=0, verbose=True):
     mesure_type = attrs["тип_измерения_спектров"]
 
     if mesure_type == "SE":
-        # print(type(Ys[0]))
+        # print(type(Ys), len(Ys))
         if len(Ys[0].shape) > 1:
             return SpectraSeries(Xs, Ys, attrs)
         else:

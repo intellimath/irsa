@@ -7,6 +7,7 @@ import rampy
 
 import matplotlib.pyplot as plt
 import ipywidgets
+from ipywidgets import fixed
 
 from irsa.preprocess import utils
 import irsa.analytics as analytics
@@ -18,8 +19,18 @@ import mlgrad.smooth as smooth
 import mlgrad.inventory as inventory
 import scipy.special as special
 from IPython.display import display
+import joblib
 
 from mlgrad.af import averaging_function
+
+from scipy.spatial.distance import pdist, squareform
+from scipy import stats
+
+def xrange2irange(xrange, xs):
+    xa, xb = xrange
+    ix_range = np.argwhere((xs >= xa) & (xs <= xb)).ravel()
+    ia, ib = min(ix_range), max(ix_range)
+    return ia, ib
 
 def dist(S, X, c=0):
     return np.sqrt([((S@x)@x) for x in (X-c)])
@@ -85,9 +96,12 @@ def explained_variance_ratio(X0, *, n_component=None):
     return ratio
 
 def smooth_pca(X0, *, n_component=None):
-    from sklearn.decomposition import PCA, TruncatedSVD
+    from sklearn.decomposition import PCA
 
     m = X0.shape[0]
+    # if n_component is None:
+    #     n_component = m
+
     X1 = X0.copy()
     gap = X1[-1] - X1[0]
     trend = np.linspace(0, gap, m)
@@ -97,17 +111,17 @@ def smooth_pca(X0, *, n_component=None):
         Z[i,:] = np.roll(X, i)
     pca = PCA(n_component)
     U = pca.fit_transform(Z)
-    ratio = pca.explained_variance_ratio_.sum()
+    # ratio = pca.explained_variance_ratio_
     # print(ratio)
     Z2 = pca.inverse_transform(U)
     for i in range(m):
         Z2[i,:] = np.roll(Z2[i], -i)
-    X1 = inventory.robust_mean_2d_t(Z2, 3.0)
-    # X1 = Z2.mean(axis=0)
+    # X1 = inventory.robust_mean_2d_t(Z2, 3.0)
+    X1 = Z2.mean(axis=0)
     X = X1 + trend
     # ret = np.zeros_like(X0)
     # ret[I] = X
-    return X
+    return X, {"ls": pca.explained_variance_ratio_}
 
 def denoise(X, *, n_component=None):
     from .denoise import Denoiser
@@ -120,36 +134,351 @@ def denoise(X, *, n_component=None):
     # gap = X[-1] - X[0]
     return denoiser.denoise(X, m)
 
-def despike(X, tau=3.5):
+def denoise_svd(X, method='energy', threshold=0.9975, k=None, transpose=False):
+    """
+    Фильтрация набора спектров методом SVD.
+
+    Параметры:
+    -----------
+    X : ndarray (m x n)
+        Матрица спектров (строки — точки спектра, столбцы — спектры)
+    method : str
+        Метод выбора ранга: 'variance', 'energy', 'elbow', 'manual'
+    threshold : float
+        Пороговое значение (по умолчанию 0.995)
+    k : int
+        Ручной выбор ранга (если method='manual')
+
+    Возвращает:
+    -----------
+    Y : ndarray (m x n)
+        Спектры после фильтрации
+    info : dict
+        Словарь с информацией об оценках качества фильтрации
+        (k, собственные значения, ошибка, SNR, энергия сигнала, энергия шума)
+    """
+    from scipy.linalg import svd
+
+    if transpose:
+        XX = X.T
+    else:
+        XX = X
+    # Вычислить SVD
+    U, sigma, VT = svd(XX, full_matrices=False)
+
+    # Выбрать ранг k
+    if k is not None:
+        k = int(k)
+    elif method == 'variance':
+        cumsum_variance = sigma.cumsum() / sigma.sum()
+        k = np.argmax(cumsum_variance >= threshold) + 1
+    elif method == 'energy':
+        sigma2 = sigma**2
+        cumsum_energy = sigma2.cumsum() / sigma2.sum()
+        k = np.argmax(cumsum_energy >= threshold) + 1
+    elif method == 'elbow':
+        gaps = sigma[:-1] - sigma[1:]
+        k = np.argmax(gaps) + 1
+    else:
+        raise ValueError("method должен быть 'threshold', 'energy', 'elbow' или 'k' должен быть задан")
+
+    if k >= len(sigma):
+        k = len(sigma) - 1
+
+    # Восстановить очищенные спектры
+    Y = U[:, :k] @ np.diag(sigma[:k]) @ VT[:k, :]
+
+    if transpose:
+        Y = Y.T
+
+    # Вычислить метрики качества
+    error = np.linalg.norm(X - Y, 'fro')
+    signal_energy = np.sum(sigma[:k]**2)
+    noise_energy = np.sum(sigma[k:]**2)
+    sigma2 = sigma**2
+    # cumsum_energy = np.cumsum(sigma2) / np.sum(sigma2)
+    SNR_ratio = signal_energy / (noise_energy + 1e-10)
+
+    info = {
+        'error': error,
+        'signal_energy': signal_energy,
+        'noise_energy': noise_energy,
+        # 'cumulative_energy': cumsum_energy,
+        'SNR_ratio': SNR_ratio,
+        "sigma": sigma,
+        'k': k,
+    }
+    return np.ascontiguousarray(Y), info
+
+def despike(X, tau=3.5, mode=None, beta=0.5):
     X11 = X[1:-1]
     X02 = X[:-2]
     X20 = X[2:]
-    # S = np.minimum(abs(X11 - X02), abs(X11 - X20))
-    S = inventory.diff2(X)
+    S1, S2 = abs(X11 - X02), abs(X11 - X20)
+    S = S1 * S2 / (S1 + S2 + 1.0e-10)
+    # S = inventory.diff2(X)
     Z = inventory.modified_zscore(S)
-    mask1 = abs(Z) >= tau
+    if mode == "+":
+        mask1 = Z < -tau
+    elif mode == "-":
+        mask1 = Z > tau
+    else:
+        mask1 = abs(Z) > tau
     mask2 = ((X02 < X11) & (X11 > X20)) | ((X02 > X11) & (X11 < X20))
-    mask = mask1 & mask2
-    Y = X.copy()
+    mask12 = mask1 & mask2
+    mask = (X != X)
+    mask[1:-1] = mask12
+    Y = np.empty_like(X)
+    Y[:] = X
     for i,ma in enumerate(mask):
         if ma:
-            Y[i+1] = (X[i] + X[i+2]) / 2
-    return Y
+            xx1 = abs(X[i] - X[i-1])
+            xx2 = abs(X[i+1] - X[i])
+            xx_min, xx_max = min(xx1, xx2), max(xx1, xx2)
+            if xx_min < beta * xx_max:
+                mask[i] = False
+                continue
+            Y[i] = (X[i-1] + X[i+1]) / 2
+    return Y, mask
 
-def despiking(X, tau=3.0):
+def despiking(X, tau=3.0, mode=None, beta=0.5):
     i_tau = int(10*tau)
     i = 35
+    mask = (X != X)
     while i >= i_tau:
         t = i / 10
         t = round(t, 1)
         while True:
-            X1 = despike(X, t)
+            X1, mask0 = despike(X, t, mode=mode, beta=beta)
+            mask |= mask0
             if (X1 == X).all():
                 X = X1
                 break
             X = X1
         i -= 1
-    return X
+    return X, mask
+
+def fractal_dimension_box_counting(curve_points, max_box_size=None, min_box_size=1):
+    """
+    Calculate fractal dimension using the box-counting method.
+    
+    Parameters:
+    - curve_points: array of (x, y) coordinates
+    - max_box_size: largest box size (default: half the curve's extent)
+    - min_box_size: smallest box size (default: 1)
+    
+    Returns:
+    - dimension: estimated fractal dimension
+    #- box_sizes: array of box sizes tested
+    #- counts: number of boxes needed at each size
+    """
+
+    # Normalize curve to a grid
+    curve_points = np.array(curve_points)
+
+    # Scale to integer pixel coordinates
+    min_coords = curve_points.min(axis=0)
+    max_coords = curve_points.max(axis=0)
+    range_coords = max_coords - min_coords
+
+    # Map to pixel grid (1000x1000)
+    grid_size = 1024
+    normalized = ((curve_points - min_coords) / range_coords * (grid_size - 1)).astype(int)
+
+    # Create binary image
+    image = np.zeros((grid_size, grid_size), dtype=bool)
+    image[normalized[:, 1], normalized[:, 0]] = True
+
+    # Box sizes to test (powers of 2)
+    if max_box_size is None:
+        max_box_size = grid_size // 4
+
+    box_sizes = 2 ** np.arange(np.log2(min_box_size), np.log2(max_box_size), 0.5).astype(int)
+    box_sizes = np.unique(box_sizes)
+
+    counts = []
+
+    for box_size in box_sizes:
+        # Count boxes containing the curve
+        coarse = image.reshape(
+            image.shape[0] // box_size, box_size,
+            image.shape[1] // box_size, box_size
+        ).max(axis=(1, 3))
+        count = np.count_nonzero(coarse)
+        counts.append(count)
+
+    counts = np.array(counts)
+
+    # Fit log-log relationship: log(N) = -D * log(box_size) + const
+    log_sizes = np.log(box_sizes)
+    log_counts = np.log(counts)
+
+    # Linear regression
+    coeffs = np.polyfit(log_sizes, log_counts, 1)
+    dimension = -coeffs[0]  # Negative slope
+
+    return dimension #, box_sizes, counts, coeffs
+
+def covering_greedy(points, radius):
+    """
+    Greedy algorithm to find minimum number of balls of given radius
+    that cover all points.
+    
+    Complexity: O(N²) but practical for N < 10000
+    """
+    uncovered = set(range(len(points)))
+    num_balls = 0
+    
+    while uncovered:
+        # Pick an uncovered point
+        point_idx = uncovered.pop()
+        center = points[point_idx]
+        
+        # Find all points within radius
+        distances = np.linalg.norm(points - center, axis=1)
+        covered = np.where(distances <= radius)[0]
+        
+        # Remove covered points from uncovered set
+        uncovered -= set(covered)
+        num_balls += 1
+    
+    return num_balls
+
+def covering_random(points, radius, max_iterations=1000):
+    """
+    Random covering: pick random centers and cover points.
+    Alternative to greedy method.
+    """
+    uncovered = set(range(len(points)))
+    num_balls = 0
+    iterations = 0
+
+    while uncovered and iterations < max_iterations:
+        # Pick random uncovered point
+        point_idx = np.random.choice(list(uncovered))
+        center = points[point_idx]
+
+        # Find all points within radius
+        distances = np.linalg.norm(points - center, axis=1)
+        covered = np.where(distances <= radius)[0]
+
+        uncovered -= set(covered)
+        num_balls += 1
+        iterations += 1
+
+    return num_balls
+
+
+def hausdorff_dimension(points, num_scales=25, min_scale=None, max_scale=None):
+    """
+    Refined version using multiple covering strategies and averaging.
+    More robust to noise and sampling artifacts.
+    """
+    
+    points = np.asarray(points, dtype=float)
+    
+    extent = points.max(axis=0) - points.min(axis=0)
+    max_extent = np.max(extent)
+    
+    if min_scale is None:
+        min_scale = max_extent * 0.005
+    if max_scale is None:
+        max_scale = max_extent * 0.4
+    
+    radii = np.logspace(np.log10(min_scale), np.log10(max_scale), num_scales)
+    
+    covers_greedy = []
+    covers_random = []
+    
+    # Greedy covering
+    for r in radii:
+        covers_greedy.append(covering_greedy(points, r))
+    
+    # Random covering (average over 3 trials)
+    for r in radii:
+        trials = []
+        for _ in range(3):
+            trials.append(covering_random(points, r))
+        covers_random.append(np.mean(trials))
+    
+    # Combine both methods
+    covers = np.array([(g + rnd) / 2 for g, rnd in zip(covers_greedy, covers_random)])
+    
+    log_radii = np.log(radii)
+    log_covers = np.log(covers)
+    
+    slope, intercept, r_value, _, std_err = stats.linregress(log_radii, log_covers)
+    dimension = -slope
+    r_squared = r_value ** 2
+    
+    return {
+        'dimension': dimension,
+        'r_squared': r_squared,
+        'radii': radii,
+        'covers': covers,
+        'covers_greedy': np.array(covers_greedy),
+        'covers_random': np.array(covers_random),
+        'slope': slope,
+        'intercept': intercept,
+        'std_err': std_err
+    }
+
+def multiplicative_scatter_correction(spectra, reference=None):
+    """
+    MSC using pure NumPy matrix operations (vectorized, no loops).
+    
+    Parameters:
+    -----------
+    spectra : np.ndarray, shape (n_samples, n_features)
+        Input spectral data
+    reference : np.ndarray, shape (n_features,), optional
+        Reference spectrum (default: mean of all samples)
+    
+    Returns:
+    --------
+    corrected_spectra : np.ndarray, shape (n_samples, n_features)
+        MSC-corrected spectra
+    m_factors : np.ndarray, shape (n_samples,)
+        Multiplicative correction factors
+    a_factors : np.ndarray, shape (n_samples,)
+        Additive correction factors
+    reference : np.ndarray, shape (n_features,)
+        Reference spectrum used
+    """
+    
+    spectra = np.asarray(spectra, dtype=np.float64)
+    n_samples, n_features = spectra.shape
+    
+    # Compute reference if not provided
+    if reference is None:
+        reference = np.mean(spectra, axis=0)
+    else:
+        reference = np.asarray(reference, dtype=np.float64)
+    
+    # Center reference spectrum
+    ref_mean = np.mean(reference)
+    ref_centered = reference - ref_mean
+    
+    # Center all spectra
+    spec_means = np.mean(spectra, axis=1, keepdims=True)  # Shape: (n_samples, 1)
+    spectra_centered = spectra - spec_means
+    
+    # Calculate regression coefficients using matrix operations
+    # m_i = Σ[(x_i - x̄_i) * (x_ref - x̄_ref)] / Σ[(x_ref - x̄_ref)²]
+    
+    numerator = np.dot(spectra_centered, ref_centered)  # Shape: (n_samples,)
+    denominator = np.dot(ref_centered, ref_centered)    # Scalar
+    
+    m_factors = numerator / denominator
+    
+    # a_i = x̄_i - m_i * x̄_ref
+    a_factors = spec_means.ravel() - m_factors * ref_mean
+    
+    # Apply correction: (x_i - a_i) / m_i
+    corrected_spectra = (spectra - a_factors[:, np.newaxis]) / m_factors[:, np.newaxis]
+    
+    return corrected_spectra #, m_factors, a_factors, reference
+
 
 class SpectraSeries:
     """
@@ -278,14 +607,12 @@ class SpectraSeries:
 
         self.exclude_selected()
     #
-    def select_baselines(self, tau2=1.0e5, tau2_smooth=0, func=None, func2=None, func2_e=None, beta=100, func2_mode="e", xrange=None, d=2):
+    def select_baselines(self, tau2=1.0e5, tau1=0, tau2_smooth=0, func=None, func2=None, func2_e=None, 
+                         beta=100, func2_mode="e", xrange=None, d=2):
         import matplotlib.pyplot as plt
         import ipywidgets
 
         N = len(self.y)
-
-        # if self.tau2s is None:
-        #     self.tau2s = np.full(N, tau2, "d")
 
         i_series_slider = ipywidgets.IntSlider(value=0, min=0, max=N-1)
         i_series_slider.layout.width="50%"
@@ -297,12 +624,8 @@ class SpectraSeries:
 
             Ys = self.y[i_series]
 
-            # if func is None:
-            #     mu = inventory.robust_mean_2d_t(Ys, 3.5)
-            #     sigma2 = inventory.robust_mean_2d_t((Ys - mu)**2, 3.5)
-            #     func = funcs.Step(np.sqrt(sigma2.mean()))
-
-            spcol.select_baselines(tau2=tau2, tau2_smooth=tau2_smooth, func=func, func2=func2, func2_e=func2_e, beta=beta, 
+            spcol.select_baselines(tau2=tau2, tau1=tau1, tau2_smooth=tau2_smooth,
+                                   func=func, func2=func2, func2_e=func2_e, beta=beta,
                                    func_mode='e', xrange=xrange, d=d)
     #
     def replace_spectra_with_corrected(self):
@@ -310,7 +633,7 @@ class SpectraSeries:
             sp = self[i]
             sp.replace_spectra_with_corrected()
     #
-    def subtract_baselines(self, func=None, func2=None, func2_e=None, d=2, tau2=1.0e3, verbose=True):
+    def subtract_baselines(self, func=None, func2=None, func2_e=None, d=2, tau2=1.0e3, tau1=0, verbose=True, n_jobs=1):
         import ipywidgets
         from IPython.display import display
 
@@ -322,14 +645,14 @@ class SpectraSeries:
 
         for i in range(N):
             sp = self[i]
-            sp.subtract_baselines(func=func, func2=func2, func2_e=func2_e, d=d, tau2=tau2, verbose=False)
+            sp.subtract_baselines(func=func, func2=func2, func2_e=func2_e, d=d, tau2=tau2, tau1=tau1, verbose=False, n_jobs=n_jobs)
             self.y[i] = sp.y
             if verbose:
                 fp.value = i+1
         if verbose:
             fp.close()
     #
-    def plot_spectra(self, smoothing=False, kind="wh", display_data=False,
+    def plot_spectra(self, smoothing=False, kind="wh", #display_data=False,
                      marker='s', ms=0, lw=0.25, **kwds):
         import matplotlib.pyplot as plt
         import ipywidgets
@@ -340,7 +663,7 @@ class SpectraSeries:
         @ipywidgets.interact(i_series=i_series_slider, continuous_update=False)
         def _plot_spectra(i_series):
             sp = self[i_series]
-            sp.plot_spectra(smoothing=smoothing, kind=kind, display_data=display_data, 
+            sp.plot_spectra(smoothing=smoothing, kind=kind, #display_data=display_data, 
                             marker=marker, ms=ms, lw=lw, **kwds)
     #
     def plot_pca_spectra(self, n_component=None):
@@ -350,45 +673,29 @@ class SpectraSeries:
         i_slider = ipywidgets.IntSlider(min=0, max=len(self.y)-1)
         i_slider.layout.width="50%"
 
-        xrange_slider = ipywidgets.IntRangeSlider(
-            value=(min(self.x[0]), max(self.x[0])), 
-            min=min(self.x[0]), 
-            max=max(self.x[0]))
-        xrange_slider.layout.width="90%"
-
-        # i_slider.on_trait_change(i_on_value_change, name="value")
-
-        @ipywidgets.interact(i=i_slider, xrange=xrange_slider, continuous_update=False)
-        def _plot_pca_spectra(i, xrange):
-            # plt.close("_plot_spectra_series")
-            fig = plt.figure("_plot_spectra_series", figsize=(12,5))
+        @ipywidgets.interact(i=i_slider, continuous_update=False)
+        def _plot_pca_spectra(i):
+            fig = plt.figure("_plot_pca_spectra", figsize=(12,5))
             fig.canvas.header_visible = False
             fig.canvas.footer_visible = False
             fig.canvas.toolbar_position = 'right'
             fig.clear()
 
             Ys = self.y[i]
-            Ys2 = Ys / 100
 
             nonlocal n_component
             if n_component is None:
                 n_component = Ys.shape[0]
-            c, As, Ls = pca.find_loc_and_pc(Ys2, n_component)
-            print(Ls/Ls.sum())
-            # print(As)
+            c, As, Ls = pca.find_loc_and_pc(Ys, n_component)
+            Us = (Ys - c) @ As.T
             plt.subplot(1,2,1)
             plt.title(f"{self.key} ({len(self.y[i])} spectra)")
             plt.minorticks_on()
             plt.grid(1)
             plt.plot(Ls/Ls.sum(), marker='o')
             plt.subplot(1,2,2)
-            plt.scatter((Ys2 - c) @ As[0], (Ys2 - c) @ As[1])
+            plt.scatter(Us[0], Us[1], c='w', edgecolors='k', s=36)
             plt.minorticks_on()
-
-            # xa, xb = xrange
-            # ix_range = np.argwhere((xs >= xa) & (xs <= xb)).ravel()
-            # i0, i1 = min(ix_range), max(ix_range)
-            # plt.legend()
             plt.tight_layout()
             plt.show()
     #
@@ -476,62 +783,88 @@ class SpectraSeries:
         i_slider = ipywidgets.IntSlider(min=0, max=len(self.y)-1)
         i_slider.layout.width="50%"
 
-        # def i_on_value_change(change):
-        #     i = i_slider.value
+        def i_on_value_change(change):
+            # i = i_slider.value
+            j_slider.value = 0
 
-        # i_slider.on_trait_change(i_on_value_change, name="value")
+        i_slider.on_trait_change(i_on_value_change, name="value")
 
-        @ipywidgets.interact(i=i_slider, continuous_update=False)
-        def _plot_window_mean_std(i=i_slider):
+        j_slider = ipywidgets.IntSlider(min=0, max=len(self.x[0])-1, value=0)
+        j_slider.layout.width="50%"
+
+        xrange_slider = ipywidgets.IntRangeSlider(
+            value=(min(self.x[0]), max(self.x[0])), 
+            min=min(self.x[0]), 
+            max=max(self.x[0]))
+        xrange_slider.layout.width="90%"
+
+        @ipywidgets.interact(i=i_slider, j=j_slider, xrange=xrange_slider, continuous_update=False)
+        def _plot_window_mean_std(i, j, xrange):
             xs = self.x[i]
             Ys = self.y[i]
 
-            j_slider = ipywidgets.IntSlider(min=0, max=len(xs)-1, value=0)
-            j_slider.layout.width="50%"
-
-            # def j_on_value_change(change):
-            #     j = j_slider.value
-
-            # j_slider.on_trait_change(i_on_value_change, name="value")
-
-            plt.close("_window_mean_std")
-            fig = plt.figure("_window_mean_std", figsize=(12,3))
+            # plt.close("_window_mean_std")
+            plt.figure("_window_mean_std", figsize=(14,4))
             # fig.canvas.header_visible = False
             # fig.canvas.footer_visible = False
             # fig.canvas.toolbar_position = 'right'
             plt.title(f"{self.key} ({len(self.x[i])} spectra)")
             for ys in Ys:
-                plt.plot(xs, ys, linewidth=0.75, alpha=0.5)
+                plt.plot(xs, ys, lw=0, alpha=0.5, marker='s', markersize=4, color='gray')
 
-            plt.xlabel("j")
+            mu_i = inventory.robust_mean_2d_t(Ys, tau=3.5)
+            plt.plot(xs, mu_i, linewidth=1.5, color='darkred', label="mean spectra")
+            bs = smooth.whittaker_smooth(mu_i, tau2=1.0e3,
+                      func=funcs.RStep(0.01, 0.001),
+                      func2_e=inventory.relative_abs_max,)
+            plt.plot(xs, bs, linewidth=1.5, color='m', label="baseline")
+
+            plt.plot(xs, Ys[i], linewidth=0.75, color='darkblue', label="current")
+
+            plt.vlines(xs[j], 0, Ys[i].max(), color='k')
+
+            # plt.xlabel("j")
+            plt.tight_layout()
+            x_min, x_max = xrange
+            ii = np.argwhere((xs >= x_min) & (xs <= x_max)).ravel()
+            i0, i1 = min(ii), max(ii)
+            plt.xlim(0.99*x_min, 1.01*x_max)
+            plt.ylim(min(ys[i0:i1+1].min() for ys in Ys), max(ys[i0:i1+1].max() for ys in Ys))
+            plt.legend()
+            plt.minorticks_on()
+            plt.grid(lw=0.75, ls=':')
             plt.show()
 
-            @ipywidgets.interact(j=j_slider, continuous_update=False)
-            def _plot_window_mean_std(j):
-                plt.figure("_window_mean_std_j", figsize=(10,3))
-                # fg.canvas.header_visible = False
-                # fg.canvas.footer_visible = False
-                # fg.canvas.toolbar_position = 'right'
-                plt.title(f"Means and std")
+            plt.figure("_hist_j", figsize=(10,3))
+            # plt.hist(inventory.modified_zscore(ys_j), rwidth=0.9, bins=6)
+            plt.hist(Ys[:,j], rwidth=0.9, bins=6)
+            plt.minorticks_on()
+            plt.grid(lw=0.75, ls=':')
+            plt.tight_layout()
+            plt.show()
 
-                ys_j = Ys[:,j]
-                m = len(ys_j)
-                _mu = []
-                _std = []
-                for ii in range(m-10):
-                    _mu.append(ys_j[ii:ii+10].mean())
-                    _std.append(ys_j[ii:ii+10].std())
-                _mu = np.array(_mu)
-                _std = np.array(_std)
+            plt.figure("_window_mean_std_j", figsize=(12,2))
+            # fg.canvas.header_visible = False
+            # fg.canvas.footer_visible = False
+            # fg.canvas.toolbar_position = 'right'
+            plt.title(f"Means and std")
 
-                plt.plot(range(len(_mu)), _mu, marker='o', color='k')
-                plt.fill_between(range(len(_mu)), _mu-_std, _mu+_std, color='lightblue')
-                plt.minorticks_on()
-                plt.grid(ls=':', lw=0.75)
-                plt.show()
-                plt.figure("_hist_j", figsize=(8,3))
-                plt.hist(inventory.modified_zscore(ys_j), rwidth=0.9, bins=7)
-                plt.show()
+            ys_j = Ys[:,j]
+            m = len(ys_j)
+            _mu = []
+            _std = []
+            for ii in range(m-10):
+                _mu.append(ys_j[ii:ii+10].mean())
+                _std.append(ys_j[ii:ii+10].std())
+            _mu = np.array(_mu)
+            _std = np.array(_std)
+
+            plt.plot(range(len(_mu)), _mu, marker='o', color='k')
+            plt.fill_between(range(len(_mu)), _mu-_std, _mu+_std, color='lightblue')
+            plt.minorticks_on()
+            plt.grid(ls=':', lw=0.75)
+            plt.tight_layout()
+            plt.show()
     #
     def plot_zscore(self, kind="m-zscore"):
         import matplotlib.pyplot as plt
@@ -559,7 +892,7 @@ class SpectraSeries:
 
             mu = inventory.robust_mean_2d_t(Ys, 3.5)
             plt.plot(xs, 5+3*mu/max(mu), color="Gray", alpha=0.5)
-            
+
             Zs = np.empty_like(Ys)
             for j in range(len(xs)):
                 ys_j = Ys[:,j]
@@ -730,6 +1063,11 @@ class SpectraSeries:
             if m > 0:
                 print(f"Not all finite in serie {k}: {self.key}: {m}")
     #
+    def multiplicative_scatter_correction(self):
+        for k in range(len(self.y)):
+            sp = self[k]
+            sp.multiplicative_scatter_correction()
+    #
     def drop_zeros_spectrum(self):
         Ys = self.y
         for k in range(len(Ys)):
@@ -774,12 +1112,27 @@ class SpectraSeries:
             for y in ys:
                 y[:] = (y / y.max()) * scale
     #
-    def scale_by_mean(self, scale=1.0):
+    def scale_by_mean(self, scale=1.0, power=1.0):
+        Ys = self.y
+        if power == 1.0:
+            for k in range(len(Ys)):
+                ys = Ys[k]
+                for y in ys:
+                    mu = abs(y).mean()
+                    y[:] = (y / mu) * scale
+        else:
+            for k in range(len(Ys)):
+                ys = Ys[k]
+                for y in ys:
+                    mu = ((abs(y) ** power).mean()) ** (1/power)
+                    y[:] = (y / mu) * scale
+    #
+    def scale_by_norm(self, scale=1.0):
         Ys = self.y
         for k in range(len(Ys)):
             ys = Ys[k]
             for y in ys:
-                y[:] = (y / abs(y).mean()) * scale
+                y[:] = (y / np.sqrt(y @ y).mean()) * scale
     #
     def smooth(self, tau=1.0, windows=None, beta=10.):
         Ys = self.y
@@ -799,14 +1152,14 @@ class SpectraSeries:
 
         for k in range(len(Ys)):
             ys = Ys[k]
-        
+
             ids = []
             for i, y in enumerate(ys):
                 count = (y > y_max).sum()
                 if count > y_max_count:
                     continue
                 ids.append(i)
-            
+
             if ids:
                 # if len(ids) > 5:
                 ids = np.array(ids)
@@ -817,7 +1170,7 @@ class SpectraSeries:
         if Is:
             Ys = [Ys[k] for k in Is]
             Xs = [Xs[k] for k in Is]
-            self.x, self.y = Xs, Ys      
+            self.x, self.y = Xs, Ys
     #
     def remove_by_zscore_spectra(self, tau=3.5, max_count=40):
         Xs, Ys = self.x, self.y
@@ -842,7 +1195,7 @@ class SpectraSeries:
         if Is:
             Ys = [Ys[k] for k in Is]
             Xs = [Xs[k] for k in Is]
-            self.x, self.y = Xs, Ys           
+            self.x, self.y = Xs, Ys
     #
     def remove_outlier_spectra(self, delta=0.10, tau=3.0, max_count=30):
         from irsa.preprocess.utils import robust_mean2
@@ -863,12 +1216,17 @@ class SpectraSeries:
         Xs = [Xs[k] for k in ids]
         self.x, self.y = Xs, Ys
     #
-    def despike(self, tau=2.0):
+    def despike(self, tau=2.0, mode=None, beta=0.5):
         for ys in self.y:
             for y in ys:
-                y[:] = despiking(y, tau)
+                y[:] = despiking(y, tau, mode=mode, beta=beta)[0]
     #
-    def robust_averaging(self, tau=3.0):
+    def denoise_svd(self, method='energy', threshold=0.9975, k=None, transpose=False):
+        m = len(self.y)
+        for i in range(m):
+            self.y[i], _ = denoise_svd(self.y[i], method=method, threshold=threshold, k=k, transpose=transpose)
+    #
+    def robust_averaging(self, tau=3.5):
         if len(self.y[0].shape) == 1:
             raise TypeError("Усреднять можно только в сериях")
 
@@ -890,23 +1248,51 @@ class SpectraSeries:
         # o.stderr = np.ascontiguousarray(dYs)
         return o
     #
-    def flatten(self, filter="m-zscore", tau=3.5):
+    def copy(self):
+        xx = [x.copy() for x in self.x]
+        yy = [y.copy() for y in self.y]
+        dd = SpectraSeries(xx, yy, self.attrs)
+        return dd
+    #
+    def filter(self, kind="m-zscore", **kwds):
         Ys = []
         for yk in self.y:
-            mu = inventory.robust_mean_2d_t(yk, tau=3.5)
-            dd = abs(yk - mu)
-            d = dd.sum(axis=1)
-            z = inventory.modified_zscore(d)
-            mask = (abs(z) < tau)
-            yk2 = np.array([y for m, y in zip(mask, yk) if m])
+            if kind == "m-zscore":
+                tau = kwds.get("tau", 3.5)
+                mu = inventory.robust_mean_2d_t(yk, tau=tau)
+                dd = abs(yk - mu)
+                z = inventory.modified_zscore(dd.sum(axis=1))
+                mask = (abs(z) < tau)
+                yk2 = np.array([y for m, y in zip(mask, yk) if m])
+            else:
+                yk2 = yk
             Ys.append(yk2)
-        Ys = tuple(Ys)
-        y = np.concatenate(Ys, axis=0)
+        self.y = Ys
+    #
+    def flatten(self):
+        # Ys = tuple(self.y)
+        y = np.concatenate(self.y, axis=0)
+        y = np.ascontiguousarray(y)
         x = np.ascontiguousarray(self.x[0])
 
         o = Spectra(x, y, self.attrs)
         return o
     #
+    def apply(self, func, inplace=True):
+        if inplace:
+            for x,ys in zip(self.x, self.y):
+                for y in ys:
+                    y2 = func(x, y)
+                    y[:] = y2
+        else:
+            Ys = []
+            for x,ys in zip(self.x, self.y):
+                ys2 = np.empty_like(ys)
+                for i, y in enumerate(ys):
+                    y2 = func(x, y)
+                    ys2[i,:] = y2
+                Ys.append(ys2)
+            self.y = Ys
 
 class Spectra:
     #
@@ -938,10 +1324,14 @@ class Spectra:
             if not np.all(x == x0):
                 raise TypeError("some xs not equal")
     #
-    def crop(self, start, end=None):
-        mask = (self.x >= start)
-        if end is not None:
-            mask &= (self.x <= end)
+    def copy(self):
+        dd = SpectraSeries(self.x.copy(), self.y.copy(), self.attrs)
+        return dd
+    #
+    def crop(self, start_x, end_x=None):
+        mask = (self.x >= start_x)
+        if end_x is not None:
+            mask &= (self.x <= end_x)
         self.x = self.x[mask]
         self.y = self.y[:,mask]
         self.tau2_values = np.zeros_like(self.x)
@@ -990,6 +1380,15 @@ class Spectra:
             ys = Ys[k]
             Ys[k,:-1] = ys[1:]-ys[:-1]
             Ys[k,-1] = 0
+    #
+    def filter(self, kind="m-zscore", **kwds):
+        if kind == "m-zscore":
+            tau = kwds.get("tau", 3.5)
+            mu = inventory.robust_mean_2d_t(self.y, tau=tau)
+            dd = abs(self.y - mu)
+            z = inventory.modified_zscore(dd.sum(axis=1))
+            mask = (abs(z) < tau)
+            self.y = np.array([y for m, y in zip(mask, self.y) if m])
     #
     def flatten(self):
         return self
@@ -1165,14 +1564,21 @@ class Spectra:
                 i0, i1 = min(ii), max(ii)
                 plt.fill_between(xs[i0:i1], 0, np.max(self.y[:,i0:i1], axis=0), color='LightBlue')
     #
-    def scale_by_mean(self, scale=1.0):
+    def multiplicative_scatter_correction(self):
+        self.y = multiplicative_scatter_correction(self.y)
+    #
+    def scale_by_mean(self, scale=1.0, power=1.0):
         N = len(self.y)
-        for k in range(N):
-            ys = self.y[k]
-            # err = self.stderr[k]
-            mu = abs(ys).mean()
-            ys[:] = (ys / mu) * scale
-            # err[:] = (err / mu) * scale
+        if power == 1.0:
+            for k in range(N):
+                ys = self.y[k]
+                mu = abs(ys).mean()
+                ys[:] = (ys / mu) * scale
+        else:
+            for k in range(N):
+                ys = self.y[k]
+                mu = ((abs(ys) ** power).mean()) ** (1/power)
+                ys[:] = (ys / mu) * scale
     #
     def scale_by_robust_zscore(self, tau=3.5, scale=1.0):
         N = len(self.y)
@@ -1190,19 +1596,31 @@ class Spectra:
             ys = self.y[k]
             # err = self.stderr[k]
             mu = ys.mean()
-            absdev = abs(ys - mu)
-            sigma = absdev.std()
+            sigma = ys.std()
             ys[:] = scale * (ys - mu) / sigma
     #
-    def scale_by_modified_zscore(self, tau=3.5, scale=1.0):
+    def scale_by_modified_zscore(self, scale=1.0):
         N = len(self.y)
         for k in range(N):
             ys = self.y[k]
-            # err = self.stderr[k]
             mu = np.median(ys)
             absdev = abs(ys - mu)
-            sigma = np.mean(absdev)
+            sigma = np.median(absdev)
+            if sigma == 0:
+                sigma = np.mean(absdev)
             ys[:] = scale * 0.6748 * (ys - mu) / sigma
+    #
+    def scale_by_modified_zscore_powered(self, scale=1.0):
+        self.y = np.log(self.y)
+        self.scale_by_modified_zscore(tau=tau, scale=1)
+        self.y = np.exp(self.y)
+        self.y *= scale
+    #
+    def scale_by_zscore_powered(self, scale=1.0):
+        self.y = np.log(self.y)
+        self.scale_by_zscore(scale=1)
+        self.y = np.exp(self.y)
+        self.y *= scale
     #
     def scale_by_max(self, scale=1.0):
         N = len(self.y)
@@ -1213,18 +1631,13 @@ class Spectra:
             ys[:] = (ys / mu) * scale
             # err[:] = (err / mu) * scale
     #
-    def scale_by_mean(self, scale=1.0):
-        N = len(self.y)
-        for k in range(N):
-            ys = self.y[k]
-            # err = self.stderr[k]
-            mu = abs(ys).mean()
-            ys[:] = (ys / mu) * scale
-            # err[:] = (err / mu) * scale
-    #
-    def despike(self, tau=2.0):
+    def despike(self, tau=2.0, mode=None, beta=0.5):
         for ys in self.y:
-            ys[:] = despiking(ys, tau)
+            ys[:] = despiking(ys, tau, mode=mode, beta=beta)[0]
+    #
+    def denoise_svd(self, method='energy', threshold=0.9975, k=None, transpose=False):
+        #
+        self.y, _ = denoise_svd(self.y, method=method, threshold=threshold, k=k, transpose=transpose)
     #
     # def remove_outlier_spectra(self, tau=3.0):
     #     Xs, Ys = self.x, self.y
@@ -1391,7 +1804,7 @@ class Spectra:
             plt.title(self.key, fontdict={"size":10}, loc="left")
             xs = self.x
             for ys in self.y:
-                plt.plot(xs, ys, linewidth=0.4, alpha=0.5)
+                plt.plot(xs, ys, linewidth=0.5, alpha=0.5)
 
             ys_i = self.y[i]
 
@@ -1403,7 +1816,7 @@ class Spectra:
 
             nonlocal func
 
-            plt.plot(xs, ys_i, linewidth=1.0, color='DarkBlue', marker='o', ms=2, label=f"current ({i})")
+            plt.plot(xs, ys_i, linewidth=1.0, color='DarkBlue', marker='o', ms=1, label=f"current ({i})")
 
             ys_sm = smooth.whittaker_smooth(
                 ys_i,
@@ -1413,7 +1826,7 @@ class Spectra:
                 tau2=tau2,
                 d=d)
 
-            plt.plot(xs, ys_sm, linewidth=1.0, color='m', label=rf"smoothed ($\lambda=${tau2:.1f})")
+            plt.plot(xs, ys_sm, linewidth=1.0, color='r', label=rf"smoothed ($\lambda=${tau2:.1f})")
 
             x_min, x_max = xrange
             plt.xlim(0.99*x_min, 1.01*x_max)
@@ -1473,6 +1886,74 @@ class Spectra:
             plt.minorticks_on()
             plt.show()
     #
+    def plot_hist(self, bins=20):
+        import matplotlib.pyplot as plt
+        import ipywidgets
+
+        i_slider = ipywidgets.IntSlider(min=0, max=len(self.y)-1)
+        i_slider.layout.width="50%"
+
+        @ipywidgets.interact(i=i_slider, continuous_update=False)
+        def _plot_hist_items(i=i_slider):
+            xs = self.x
+
+            plt.figure(figsize=(13,4))
+            plt.title(f"{self.key} ({len(xs)} spectra)")
+
+            for ys in self.y:
+                plt.plot(xs, ys, linewidth=0.25, alpha=0.25)
+            plt.plot(xs, self.y[i], color="k", linewidth=1.5)
+
+            plt.grid(ls=':', lw=0.5)
+            plt.minorticks_on()
+            plt.tight_layout()
+            plt.show()
+            
+            plt.figure(figsize=(13,3))
+            plt.hist(self.y[i], bins=bins, rwidth=0.9)
+            plt.grid(ls=':', lw=0.5)
+            plt.minorticks_on()
+            plt.tight_layout()
+            plt.show()
+    #
+    def plot_laser_tail(self, offset):
+        import matplotlib.pyplot as plt
+        import ipywidgets
+
+        i_slider = ipywidgets.IntSlider(min=0, max=len(self.y)-1)
+        i_slider.layout.width="50%"
+        ss_slider = ipywidgets.FloatSlider(min=0, max=200, step=1, value=1)
+        ss_slider.layout.width="50%"
+        dd_slider = ipywidgets.FloatSlider(min=0, max=100, step=1, value=1)
+        dd_slider.layout.width="50%"
+
+        @ipywidgets.interact(i=i_slider, ss=ss_slider, dd=dd_slider, continuous_update=False)
+        def _plot_laser_tail(i=i_slider, ss=ss_slider, dd=dd_slider):
+            xs = self.x
+
+            pp = lambda xx, ss, dd: np.pow(xx/dd, ss/2-1) * np.exp(-xx / (2*dd))
+
+            plt.figure(figsize=(13,4))
+            plt.title(f"{self.key} ({len(xs)} spectra)")
+
+            for ys in self.y:
+                plt.plot(xs, ys, linewidth=0.25, alpha=0.25)
+            
+            plt.plot(xs, self.y[i], color="k", linewidth=1.5)
+
+            xx = xs - offset
+            ix_max = np.argmax(self.y[i])
+            pv = pp(xx, ss, dd)
+            pv = pv / np.max(pv) * self.y[i,ix_max]
+            plt.plot(xs, pv, color="m", linewidth=1.5)
+            plt.plot(xs, self.y[i] - pv, color="b", linewidth=1.5)
+            
+
+            plt.grid(ls=':', lw=0.5)
+            plt.minorticks_on()
+            plt.tight_layout()
+            plt.show()            
+    #
     def select_baselines(self, tau2=1000.0, tau1=0.0, tau2_smooth=0.0, override_tau2=True,
                          bs_scale=3.0, alpha=0.001, eps=0.001, beta=1.0e2,
                          func=None, func2=None, func2_e=None, xrange=None,
@@ -1485,10 +1966,14 @@ class Spectra:
         if override_tau2:
             for i in range(N):
                 self.tau2_values[i] = tau2
+                self.bs[i,:] = 0
+                self.ys_bs[i,:] = 0
         else:
             mask = (self.tau2_values == 0)
             if mask.sum() > 0:
                 self.tau2_values[mask] = tau2
+                self.bs[i,:] = 0
+                self.ys_bs[i,:] = 0
 
         # self.tau1_values = N * [tau1]
 
@@ -1549,6 +2034,9 @@ class Spectra:
         button.on_click(button_click)
         display(button)
 
+        # b_all = ipywidgets.Checkbox(value=False, description="Recalculate_baselines")
+
+
         @ipywidgets.interact(i=i_slider, tau2=tau2_slider, #tau1=tau1_slider, 
                              xrange=xrange_slider, continuous_update=False)
         def _plot_select_baselines(i, tau2, xrange):
@@ -1561,7 +2049,7 @@ class Spectra:
             plt.title(self.key, fontdict={"size":10}, loc="left")
             xs = self.x
             for ys in self.y:
-                plt.plot(xs, ys, linewidth=0.4, alpha=0.25)
+                plt.plot(xs, ys, linewidth=0.5, alpha=0.25)
 
             ys_i = self.y[i]
 
@@ -1587,22 +2075,22 @@ class Spectra:
 
             plt.plot(xs, ys_i_smooth, linewidth=1.5, color='DarkBlue', label=f"current ({i})")
 
+            scale = np.abs(ys_i_smooth).mean()
 
-            # ss = np.mean(np.abs(ys_i_smooth))
-
-            bs, dd = smooth.whittaker_smooth_weight_func2(
-                ys_i_smooth,
+            bs = smooth.whittaker_smooth(
+                ys_i_smooth / scale,
                 func=func,
                 func2=func2,
                 func2_e=func2_e,
                 tau2=tau2,
+                tau1=tau1,
                 d=d)
 
-            # bs *= ss
+            bs *= scale
             self.bs[i,:] = bs
             self.ys_bs[i,:] = self.y[i] - bs
 
-            plt.plot(xs, bs, linewidth=1.0, color='m', label=f"baseline (K:{dd['K']} tol:{dd['tol']:.3e})")
+            plt.plot(xs, bs, linewidth=1.5, color='m', label=f"baseline")
 
             x_min, x_max = xrange
             plt.xlim(0.99*x_min, 1.01*x_max)
@@ -1614,7 +2102,7 @@ class Spectra:
             plt.minorticks_on()
             plt.grid(1)
             plt.legend()
-            plt.tight_layout()
+            # plt.tight_layout()
             # plt.show()
 
             # fig = plt.figure("_draw_baselines", figsize=(12,3))
@@ -1625,7 +2113,7 @@ class Spectra:
             # plt.title(self.key, fontdict={"size":10}, loc="left")
             ax2 = plt.subplot(2,1,2, sharex=ax1)
             for ys_bs in self.ys_bs:
-                plt.plot(self.x, ys_bs, linewidth=0.4, alpha=0.25)
+                plt.plot(self.x, ys_bs, linewidth=0.5, alpha=0.25)
             plt.plot(self.x, self.ys_bs[i], linewidth=0.75, color='DarkBlue', label="current")
             ms = []
             for i,ys_bs in enumerate(self.ys_bs):
@@ -1818,30 +2306,112 @@ class Spectra:
     def subtract_selected_baselines(self):
         self.ys_bs = self.y - self.bs
     #
-    def subtract_baselines(self, func=None, func2=None, func2_e=None, d=2, tau2=1.0e3, verbose=True):
+    def subtract_baselines(self, func=None, func2=None, func2_e=None, d=2, tau2=1.0e3, tau1=0, verbose=True, n_jobs=1):
         import ipywidgets
         from IPython.display import display
 
-        N = len(self.y)
-        if verbose:
-            fp = ipywidgets.FloatProgress(min=0, max=N, value=0, bar_style="success", 
+        N, n = self.y.shape
+        if verbose and n_jobs == 1:
+            fp = ipywidgets.FloatProgress(min=0, max=N, value=0, bar_style="success",
                                           description=self.key)
             fp.layout.width = "auto"
             display(fp)
+        else:
+            fp = None
+            print(self.key)
 
-        for i in range(N):
-            y_i = self.y[i]
+
+        def _subtract_baseline(i, y_i):
+            scale = abs(y_i).mean()
             bl = smooth.whittaker_smooth(
-                y_i,
+                y_i / scale,
                 func=func,
                 func2=func2,
                 func2_e=func2_e,
                 tau2=tau2,
+                tau1=tau1,
                 d=d)
-            self.y[i,:] = y_i - bl
-            if verbose:
+            bl *= scale
+            y_i[:] = y_i - bl
+            if verbose and n_jobs == 1:
                 fp.value = i+1
-        if verbose:
+            return y_i
+
+        if n_jobs <= 0:
+            n_jobs = 1
+
+        if n_jobs == 1:
+            for i in range(N):
+                y_i = self.y[i]
+                y_i = _subtract_baseline(i, y_i)
+                # bl = smooth.whittaker_smooth(
+                #     y_i,
+                #     func=func,
+                #     func2=func2,
+                #     func2_e=func2_e,
+                #     tau2=tau2,
+                #     tau1=tau1,
+                #     d=d)
+                # self.y[i,:] = y_i - bl
+                if verbose:
+                    fp.value = i+1
+        else:
+            with joblib.Parallel(n_jobs=n_jobs, max_nbytes=None) as parallel:
+                result = parallel(
+                    joblib.delayed(_subtract_baseline)(i, self.y[i]) for i in range(N)
+                )
+            for y_i, y in zip(self.y, result):
+                y_i[:] = y
+        if verbose and n_jobs == 1:
+            fp.close()
+    #
+    def smooth_spectra(self, func=None, func2=None, func2_e=None, d=2, tau2=1.0e3, tau1=0, verbose=True, n_jobs=1):
+        import ipywidgets
+        from IPython.display import display
+
+        N, n = self.y.shape
+        if verbose and n_jobs == 1:
+            fp = ipywidgets.FloatProgress(min=0, max=N, value=0, bar_style="success",
+                                          description=self.key)
+            fp.layout.width = "auto"
+            display(fp)
+        else:
+            fp = None
+            print(self.key)
+
+
+        def _smooth_spectra(i, y_i):
+            scale = abs(y_i).mean()
+            yy = smooth.whittaker_smooth(
+                y_i / scale,
+                func=func,
+                func2=func2,
+                func2_e=func2_e,
+                tau2=tau2,
+                tau1=tau1,
+                d=d)
+            yy *= scale
+            if verbose and n_jobs == 1:
+                fp.value = i+1
+            return yy
+
+        if n_jobs <= 0:
+            n_jobs = 1
+
+        if n_jobs == 1:
+            for i in range(N):
+                y_i = self.y[i]
+                y_i[:] = _smooth_spectra(i, y_i)
+                if verbose:
+                    fp.value = i+1
+        else:
+            with joblib.Parallel(n_jobs=n_jobs, max_nbytes=None) as parallel:
+                result = parallel(
+                    joblib.delayed(_smooth_spectra)(i, self.y[i]) for i in range(N)
+                )
+            for y_i, yy in zip(self.y, result):
+                y_i[:] = yy
+        if verbose and n_jobs == 1:
             fp.close()
     #
     def plot_egor(self, W, S):
@@ -2039,9 +2609,41 @@ class Spectra:
             # # plt.xlim(x_min, x_max)
             plt.show()
     #
-    def plot_spectra(self, smoothing=False, kind="wh", display_data=False,
+    def plot_spectra(self, smoothing=False, kind="wh", #display_data=False,
                      marker='s', ms=0, lw=0.5, **kwds):
         # from sklearn.decomposition import PCA, TruncatedSVD
+
+        tau_slider = ipywidgets.FloatSlider(value=3.5, min=1.0, max=3.5, step=0.1, readout_format=".3f")
+        tau_slider.layout.width="80%"
+
+        alpha_slider = ipywidgets.FloatSlider(value=3.5, min=1.0, max=3.5, step=0.1)
+        alpha_slider.layout.width="80%"
+
+        if kind == "despike":
+            alpha_slider.value = kwds.get("alpha", 3.5)
+            alpha_slider.min = 1.0
+            alpha_slider.max = 4.0
+            alpha_slider.step = 0.1
+        elif kind in ["wh", "wh_z"]:
+            tau0 = kwds.get("tau", 1.0)
+            alpha = kwds.get("alpha", 2.0)
+            tau_slider.min = tau0/100
+            tau_slider.max = 10 * tau0
+            tau_slider.step = tau0/100
+            tau_slider.value = tau0
+            alpha_slider.value = alpha
+        elif kind in ["denoise", "pca", "svd"]:
+            tau0 = kwds.get("tau", 100)
+            tau_slider.value = tau0
+            tau_slider.min = 1
+            tau_slider.max = len(self.x)
+            tau_slider.step = 1
+
+        if not smoothing:
+            # tau_slider.layout.visibility = 'hidden'
+            # alpha_slider.layout.visibility = 'hidden'
+            tau_slider.layout.display = 'none'
+            alpha_slider.layout.display = 'none'
 
         i_slider = ipywidgets.IntSlider(min=0, max=len(self.y)-1, description="i")
         i_slider.layout.width="50%"
@@ -2053,51 +2655,115 @@ class Spectra:
             description="xrange",)
         xrange_slider.layout.width="75%"
 
-        @ipywidgets.interact(i=i_slider, xrange=xrange_slider, continuous_update=False)
-        def _plot_spectra(i, xrange):
-            fig = plt.figure("_plot_current_spectra", figsize=(12,4.5))
+        if smoothing and kind == "svd":
+            k = kwds.get("k", None)
+            if k is None:
+                method = kwds.get("method", "energy")
+                threshold = kwds.get("threshold", 0.995)
+                transpose = kwds.get("transpose", True)
+                Ys, info = denoise_svd(self.y, method=method, threshold=threshold, transpose=transpose)
+                print(info["k"], )
+            else:
+                Ys, info = denoise_svd(self.y, method=None, k=k)
+                print(info["k"],)
+        else:
+            Ys = self.y
+
+        @ipywidgets.interact(i=i_slider, xrange=xrange_slider, tau=tau_slider, alpha=alpha_slider, continuous_update=False)
+        def _plot_spectra(i, xrange, tau, alpha):
+            # fig = plt.figure("_plot_spectra", figsize=(12,4.5))
+            fig = plt.figure(figsize=(12,4.5))
             fig.canvas.header_visible = False
             fig.canvas.footer_visible = False
             fig.canvas.toolbar_position = 'right'
-            fig.clear()
+            # fig.clear()
             plt.title(self.attrs["key"], fontdict={"size":10}, loc="left")
             xs = self.x
-            for ys in self.y:
-                plt.plot(xs, ys, linewidth=lw, alpha=0.25, marker=marker, ms=ms)
 
-            ys_i = self.y[i]
+            nonlocal Ys
+
+            # if kind == "svd":
+            #     Ys = denoise_svd(self.y, method="elbow")
+            # else:
+            #     Ys = self.y
+
+            for ys in Ys:
+                plt.plot(xs, ys, color='gray', linewidth=lw, alpha=0.33, marker=marker, ms=ms)
+
+            ys_i = Ys[i]
             if smoothing:
-                plt.plot(xs, ys_i, linewidth=1.0, color='DarkBlue', label="current", alpha=0.5)
+                plt.plot(xs, ys_i, linewidth=1.0, color='DarkBlue', label="current", marker=marker, ms=ms, alpha=0.5)
             else:
                 plt.plot(xs, ys_i, linewidth=1.0, color='DarkBlue', label="current")
-            if display_data:
-                for xi,yi in zip(self.y[i], self.x):
-                    print(f"{xi:.2f} {yi:.2f}")
+                # plt.hlines(ys_i[abs(inventory.zscore(ys_i)) <= 2].mean(), xs.min(), xs.max(), linewidth=1.0, color='DarkBlue', label="current")
+                plt.plot(xs, inventory.robust_mean_2d_t(self.y), linewidth=1.0, color='k', label="mean")
+            # if display_data:
+            #     for xi,yi in zip(self.y[i], self.x):
+            #         print(f"{xi:.2f} {yi:.2f}")
 
+            out_mask = None
             if smoothing:
                 if kind == "wh":
-                    tau2 = kwds.get("tau2", 1.0)
                     beta = kwds.get("beta", 100)
-                    ys_i_smooth = smooth_spectra(xs, ys_i, tau2=tau2, windows=self.windows, beta=beta, )
+                    ys_i_smooth = smooth_spectra(xs, ys_i, tau2=tau, windows=self.windows, beta=beta, )
+                elif kind == "wh_z":
+                    mode = kwds.get("mode", None)
+                    ys_i_smooth = smooth.whittaker_smooth(ys_i, tau2=tau,
+                                                          func=funcs.SoftAbs_Sqrt(1.0e-5).derivative_div_array,
+                                                          func2=funcs.SoftAbs_Sqrt(1.0e-5).derivative_div_array,
+                                                          # func2_e=inventory.relative_abs_max
+                                                        )
+                    dy = ys_i - ys_i_smooth
+                    dz = inventory.modified_zscore(dy)
+                    if mode == "+":
+                        out_mask = (dz > alpha)
+                    elif mode == "-":
+                        out_mask = (dz < -alpha)
+                    else:
+                        out_mask = (abs(dz) > alpha)
+                    for i, ma in enumerate(out_mask):
+                        xx1 = abs(dz[i] - X[i-1])
+                        xx2 = abs(X[i+1] - X[i])
+                        xx_min, xx_max = min(xx1, xx2), max(xx1, xx2)
+                        if xx_min < xx_max / 2:
+                            mask[i] = False
+
+                    ws = np.ones_like(ys_i)
+                    ws[out_mask] = 0
+                    ys_ws = smooth.whittaker_smooth_base(ys_i, tau2=tau, W=ws)
+                    ys_i_smooth[out_mask] = ys_ws[out_mask]
                 elif kind == "pca":
-                    n_component = kwds.get("n_component", None)
-                    ys_i_smooth = smooth_pca(ys_i, n_component=n_component)
+                    # n_component = kwds.get("n_component", None)
+                    ys_i_smooth, info = smooth_pca(ys_i, n_component=int(tau))
+                elif kind == "svd":
+                    ys_i_smooth = Ys[i]
                 elif kind == "denoise":
-                    n_component = kwds.get("n_component", None)
-                    ys_i_smooth = denoise(ys_i, n_component=n_component)
+                    # n_component = kwds.get("n_component", None)
+                    ys_i_smooth = denoise(ys_i, n_component=int(tau))
                 elif kind == "despike":
-                    tau = kwds.get("tau", 3.5)
-                    ys_i_smooth = despiking(ys_i, tau=tau)
+                    mode = kwds.get("mode", None)
+                    beta = kwds.get("beta", 0.5)
+                    ys_i_smooth, out_mask = despiking(ys_i, tau=alpha, mode=mode, beta=beta)
                 else:
                     ys_i_smooth = ys_i
                 plt.plot(xs, ys_i_smooth, linewidth=1.0, color='DarkRed', label=f"smoothed")
+                if out_mask is not None:
+                    plt.plot(xs[out_mask], ys_i[out_mask], lw=0, color='red', marker='o', ms=4, label=f"outliers")
             else:
                 ys_i_smooth = ys_i
 
+            fract = kwds.get("fract", False)
+            if fract:
+                curve_points = np.empty((len(ys_i),2))
+                curve_points[:,0] = xs #range(len(ys_i))
+                curve_points[:,1] = ys_i
+                fd = hausdorff_dimension(curve_points)["dimension"]
+                print(f"fractal dimension: {fd:.2f}")
+
             x_min, x_max = xrange
             ys_range = ys_i[(x_min <= xs) & (xs <= x_max)]
-            ymin, y_max = 0.9*np.min(ys_range), 1.2*np.max(ys_range)
-            plt.ylim(ymin, y_max)
+            ymin, y_max = 0.9*np.min(ys_range), 1.5*np.max(ys_range)
+            # plt.ylim(ymin, y_max)
 
             plt.grid(ls=':', lw=0.75)
             plt.minorticks_on()
@@ -2105,6 +2771,11 @@ class Spectra:
             plt.xlim(x_min, x_max)
             plt.legend()
             plt.show()
+            if kind == "pca":
+                plt.figure(figsize=(10,3))
+                plt.title(f"{info["ls"].sum()}")
+                plt.plot(info["ls"], marker='o')
+                plt.show()
     #
     def plot_mu_sigma(self, alpha=1.0):
         # from sklearn.decomposition import PCA, TruncatedSVD
@@ -2283,91 +2954,62 @@ class Spectra:
         import ipywidgets
         from scipy.stats import chi2
 
-        # xrange_slider = ipywidgets.IntRangeSlider(
-        #     value=(min(self.x), max(self.x)),
-        #     min=min(self.x),
-        #     max=max(self.x))
-        # xrange_slider.layout.width="90%"
-
-        alpha_slider = ipywidgets.FloatSlider(value=alpha, min=0.0, max=1.0, step=0.01)
-        alpha_slider.layout.width="50%"
+        if kind == "AM":
+            alpha_arg = fixed(alpha)
+        else:
+            alpha_slider = ipywidgets.FloatSlider(value=alpha, min=0.0, max=1.0, step=0.01)
+            alpha_slider.layout.width="50%"
+            alpha_arg = alpha_slider
 
         # i_slider.on_trait_change(i_on_value_change, name="value")
 
-        @ipywidgets.interact(alpha=alpha_slider, continuous_update=False)
+        @ipywidgets.interact(alpha=alpha_arg, continuous_update=False)
         def _plot_pca_spectra(alpha):
-            # plt.close("_plot_spectra_series")
-            fig = plt.figure("_plot_spectra_series", figsize=(12,5))
+            fig = plt.figure("_plot_pca_spectra", figsize=(12,5))
             fig.canvas.header_visible = False
             fig.canvas.footer_visible = False
             fig.canvas.toolbar_position = 'right'
             fig.clear()
             Ys = self.y
-            Ys2 = Ys / 100
 
             nonlocal n_component
             if n_component is None:
                 n_component = Ys.shape[0]
             if kind == "AM":
-                c, As, Ls = pca.find_loc_and_pc(Ys2, n_component)
+                c, As, Ls = pca.find_loc_and_pc(Ys, n_component)
             else:
                 wma = averaging_function(kind, kwds={'alpha':alpha})
-                c, As, Ls = pca.find_robust_loc_and_pc(Ys2, wma, n_component)
-            # U = np.c_[(Ys2 - c) @ As[0], (Ys2 - c) @ As[1]]
+                c, As, Ls = pca.find_robust_loc_and_pc(Ys, wma, n_component)
             Ls /= Ls.sum()
-            with np.printoptions(precision=4, suppress=True):
-                print(Ls)
-            # print(As)
             plt.subplot(1,2,1)
             plt.title(f"{self.key} ({len(self.y)} spectra)")
-            m = 1 + (Ls.cumsum() <= alpha).sum()
-            plt.plot(Ls, marker='o', markersize=4, label=f"{m} components for level {alpha:.3f}")
+            # m = 1 + (Ls.cumsum() <= alpha).sum()
+            plt.plot(Ls, marker='o', markersize=4)
             plt.minorticks_on()
             plt.grid(1)
-            plt.legend()
+            # plt.legend()
             plt.subplot(1,2,2)
             if kind == "AM":
-                c, A, Ls, S = analytics.find_loc_and_pc(Ys2, m=2, alpha=alpha)
+                c, As, Ls = pca.find_loc_and_pc(Ys, 2)
             else:
-                c, A, Ls, S = analytics.find_robust_loc_and_pc(Ys2, m=2, kind=kind, alpha=alpha)
-
-            U = (Ys2 -c) @ A.T
-            plt.scatter(U[:,0], U[:,1], c='w', edgecolors='k')
-            x_min = scale_min(U[:,0].min())
-            x_max = scale_max(U[:,0].max())
-            y_min = scale_min(U[:,1].min())
-            y_max = scale_max(U[:,1].max())
-
-            # dy = y_max - y_min
-            # dx = x_max - x_min
-
-            UX, UY = np.meshgrid(
-                np.linspace(x_min, x_max, 100),
-                np.linspace(y_min, y_max, 100))
-
-            UXY = np.c_[UX.ravel(), UY.ravel()]
-            ZZ = dist(S, UXY)
-            # ZZ2 = chi2.cdf(ZZ, 2)
-
-            ZZ = ZZ.reshape(UX.shape)
-
-            plt.scatter([c[0]], [c[1]], s=144, c="k", marker='+', linewidth=1.0)
-            with np.printoptions(precision=4, suppress=True):
-                print("scatter matrix:\n", S)
-            print(alpha)
-            levels = [0.01, 0.1]
-
-            ct = plt.contour(UX, UY, ZZ, colors="r", linestyles=':', linewidths=0.5, alpha=0.75)
-            plt.clabel(ct, fontsize=10)
-
+                wma = averaging_function(kind, kwds={'alpha':alpha})
+                c, As, Ls = pca.find_robust_loc_and_pc(Ys, wma, 2)
+            U = (Ys - c) @ As.T
+            plt.scatter(U[:,0], U[:,1], c='w', edgecolors='k', s=36)
             plt.minorticks_on()
-
-            # xa, xb = xrange
-            # ix_range = np.argwhere((xs >= xa) & (xs <= xb)).ravel()
-            # i0, i1 = min(ix_range), max(ix_range)
-            # plt.legend()
             plt.tight_layout()
             plt.show()
+    #
+    def pca_transform_spectra(self, n_component=2, kind="AM", alpha=0.95):
+        Ys = self.y
+        if kind == "AM":
+            c, As, Ls = pca.find_loc_and_pc(Ys, n_component)
+        else:
+            wma = averaging_function(kind, kwds={'alpha':alpha})
+            c, As, Ls = pca.find_robust_loc_and_pc(Ys, wma, n_component)
+        Ls /= Ls.sum()
+        U = (Ys - c) @ As.T
+        return U, Ls
     #
 
 class SpectraCollection:
@@ -2381,6 +3023,12 @@ class SpectraCollection:
         self.current_key = None
 
         self.active_windows = []
+    #
+    def copy(self):
+        dd = SpectraCollection()
+        for key, sp in self.spectra.items():
+            dd.spectra[key] = sp.copy()
+        return dd
     #
     def __getitem__(self, key):
         return self.spectra[key]
@@ -2415,7 +3063,7 @@ class SpectraCollection:
                 col.spectra[key] = sp
         return col
     #
-    def filter(self, **kwds):
+    def filter_by_attrs(self, **kwds):
         kwds_items = list(kwds.items())
         for sp in self.spectra.values():
             flag = True
@@ -2430,7 +3078,7 @@ class SpectraCollection:
     def union(self, key=None, **kwds):
         ys_list = []
         xs = None
-        for sp in self.filter(**kwds):
+        for sp in self.filter_by_attrs(**kwds):
             ys_list.append(sp.y)
             if xs is None:
                 xs = sp.x
@@ -2534,10 +3182,6 @@ class SpectraCollection:
                 col[key] = sp2
             return col
     #
-    def subtract_baselines(self, func=None, func2=None, func2_e=None, d=2, tau2=1.0e3, verbose=True):
-        for sp in self.spectra.values():
-            sp.subtract_baselines(func=func, func2=func2, func2_e=func2_e, d=d, tau2=tau2, verbose=verbose)
-    #
     def align_bottom(self):
         for sp in self.spectra.values():
             sp.align_bottom()
@@ -2563,9 +3207,13 @@ class SpectraCollection:
         for key in empty_keys:
             del self.spectra[key]
     #
-    def despike(self, tau=3.0):
+    def despike(self, tau=3.0, mode=None, beta=0.5):
         for sp in self.spectra.values():
-            sp.despike(tau=tau)
+            sp.despike(tau=tau, mode=mode, beta=beta)
+    #
+    def denoise_svd(self, method='energy', threshold=0.9975, k=None, transpose=False):
+        for sp in self.spectra.values():
+            sp.denoise_svd(method=method, threshold=threshold, k=k, transpose=transpose)
     #
     def derivative(self):
         for sp in self.spectra.values():
@@ -2607,15 +3255,41 @@ class SpectraCollection:
             sp = self.spectra[key]
             sp.plot_sigma_mu(tau2_smooth=tau2_smooth, func=func, n_component=n_component)
     #
+    def plot_spectra_agg(self, label_keys=None):
+        plt.figure(figsize=(12,4))
+        for key, sp in self.spectra.items():
+            lkey = sp.key
+            if label_keys is not None:
+                lkey = "_".join(sp.attrs[lkey] for lkey in label_keys)
+            plt.plot(sp.x, sp.y.mean(axis=0), lw=1.0, label=lkey)
+        plt.tight_layout()
+        plt.minorticks_on()
+        plt.grid(ls=':', lw=0.75)
+        plt.legend(loc="upper right")
+        plt.show()
+    #
+    def spectra_agg(self, aggfunc, key):
+        x = None
+        ys = []
+        for sp in self.spectra.values():
+            y = aggfunc(sp.y)
+            if x is None:
+                x = sp.x
+            # elif np.allclose(sp.x, x):
+            #     raise TypeError("x != sp.x")
+            ys.append(y)
+        ys = np.array(ys)
+        return Spectra(x, ys, attrs={"key":key})
+    #
     def topf(self, tval=0, crop=0, sub_bg=False, sub_valleys=True):
         col = SpectraCollection()
         for key, sp in self.spectra.items():
             col[key] = sp.topf(tval=tval, crop=crop, sub_bg=sub_bg, sub_valleys=sub_valleys)
         return col
     #
-    def crop(self, start_index, end_index=None):
+    def crop(self, start_x, end_x=None):
         for sp in self.spectra.values():
-            sp.crop(start_index, end_index)
+            sp.crop(start_x, end_x)
     #
     def smooth(self, method="irsa2", tau2=1.0, **kwargs):
         for sp in self.spectra.values():
@@ -2625,42 +3299,65 @@ class SpectraCollection:
         for sp in self.spectra.values():
             sp.scale_by_robust_mean(tau=tau, scale=scale)
     #
-    def scale_by_mean(self, scale=1.0):
+    def scale_by_mean(self, scale=1.0, power=1.0):
         for sp in self.spectra.values():
-            sp.scale_by_mean(scale=scale)
+            sp.scale_by_mean(scale=scale, power=power)
     #
     def scale_by_max(self, scale=1.0):
         for sp in self.spectra.values():
             sp.scale_by_max(scale=scale)
     #
-    def scale_by_zscore(self,scale=1.0):
+    def scale_by_zscore(self, scale=1.0):
         for sp in self.spectra.values():
             sp.scale_by_zscore(scale=scale)
     #
-    def scale_by_modified_zscore(self, tau=3.5, scale=1.0):
+    def scale_by_modified_zscore(self, scale=1.0):
         for sp in self.spectra.values():
-            sp.scale_by_modified_zscore(tau=tau, scale=scale)
+            sp.scale_by_modified_zscore(scale=scale)
+    #
+    def scale_by_zscore_powered(self, scale=1.0):
+        for sp in self.spectra.values():
+            sp.scale_by_zscore_powered(scale=scale)
+    #
+    def scale_by_modified_zscore_powered(self, scale=1.0):
+        for sp in self.spectra.values():
+            sp.scale_by_modified_zscore_powered(scale=scale)
     #
     def scale_by_robust_zscore(self, tau=3.5, scale=1.0):
         for sp in self.spectra.values():
             sp.scale_by_robust_zscore(tau=tau, scale=scale)
+    #
+    def filter(self, kind="m-zscore", **kwds):
+        for key in self.spectra.keys():
+            sp = self.spectra[key]
+            sp.filter(kind, **kwds)
     #
     def flatten(self):
         for key in self.spectra.keys():
             sp = self.spectra[key]
             self.spectra[key] = sp.flatten()
     #
+    def multiplicative_scatter_correction(self):
+        for key in self.spectra.keys():
+            sp = self.spectra[key]
+            sp.multiplicative_scatter_correction()
+    #
     def take(self, indices):
         for key in self.spectra.keys():
             sp = self.spectra[key]
             sp.take(indices)
     #
-    def plot_spectra(self, smoothing=False, kind="wh", display_data=False,
+    def robust_averaging(self, tau=3.5):
+        for key in self.spectra.keys():
+            sp = self.spectra[key]
+            self.spectra[key] = sp.robust_averaging(tau=tau)
+    #
+    def plot_spectra(self, smoothing=False, kind="wh", #display_data=False,
                      marker='s', ms=0, lw=0.25, **kwds):
         @ipywidgets.interact(key=self.select_key(), continuous_update=False)
         def _plot_current_spectra(key):
             sp = self.spectra[key]
-            sp.plot_spectra(smoothing=smoothing, kind=kind, display_data=display_data,
+            sp.plot_spectra(smoothing=smoothing, kind=kind, #display_data=display_data,
                             marker=marker, ms=ms, lw=lw, **kwds)
     #
     def plot_mu_sigma(self, alpha=2.0):
@@ -2681,6 +3378,38 @@ class SpectraCollection:
             sp = self.spectra[key]
             sp.plot_pca_spectra(n_component=n_component)
     #
+    def plot_pca_spectra_all(self, n_component=2, kind="AM", alpha=0.95):
+        attr_names = [
+            'вид_бактерий', 'штамм_бактерий',
+            # 'резистентность',
+            'номер_цикла', 'номер_эксперимента_в_цикле',
+            'номер_повтора', 'капля',
+        ]
+        keys = list(sorted(self.spectra.keys()))
+        plt.figure(figsize=(12,5))
+        LL = []
+        plt.subplot(1,2,1)
+        for key in keys:
+            sp = self.spectra[key]
+            U, Ls = sp.pca_transform_spectra(n_component=n_component, kind=kind, alpha=alpha)
+            LL.append(Ls)
+            # print(U.shape)
+            label = "-".join([sp.attrs.get(name, "_") for name in attr_names])
+            plt.scatter(U[:,0], U[:,1], s=25, label=label)
+        plt.minorticks_on()
+        plt.grid(ls=':', lw=0.5)
+        plt.legend()
+        plt.subplot(1,2,2)
+        for i, key in enumerate(keys):
+            sp = self.spectra[key]
+            label = "-".join([sp.attrs.get(name, "_") for name in attr_names])
+            plt.plot(LL[i], marker='o', ms=4, label=label)
+        plt.minorticks_on()
+        plt.grid(ls=':', lw=0.5)
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
+    #
     def select_for_exclusion(self, sigma_mu=0.10, alpha=3.5, clear=False):
         @ipywidgets.interact(key=self.select_key(), continuous_update=False)
         def _plot_current_spectra(key):
@@ -2695,22 +3424,43 @@ class SpectraCollection:
         for sp in self.spectra.values():
             sp.exclude_by_default(sigma_mu=sigma_mu, alpha=alpha, clear=clear)
     #
+    def plot_hist(self, bins=20):
+        @ipywidgets.interact(key=self.select_key(), continuous_update=False)
+        def _plot_hist(key):
+            sp = self.spectra[key]
+            sp.plot_hist(bins=bins)
+    #
+    def plot_laser_tail(self, offset):
+        @ipywidgets.interact(key=self.select_key(), continuous_update=False)
+        def _plot_laser_tail(key):
+            sp = self.spectra[key]
+            sp.plot_laser_tail(offset=offset)
+    #
     def plot_smoothed(self, tau2=1.0, func=funcs.Square(), func2=None, func2_e=None, xrange=None, d=2):
         @ipywidgets.interact(key=self.select_key(), continuous_update=False)
         def _plot_smoothed(key):
             sp = self.spectra[key]
             sp.plot_smoothed(tau2=tau2, func=func, func2=func2, func2_e=func2_e, xrange=xrange, d=d)
     #
-    def select_baselines(self, tau2=1000.0, tau2_smooth=0, xrange=None,
+    def select_baselines(self, tau2=1000.0, tau1=0, tau2_smooth=0, xrange=None,
                          func=funcs.Expit(-10.0), func2=None, func2_e=None,
                          d=2):
         @ipywidgets.interact(key=self.select_key(), continuous_update=False)
         def _select_baselines(key):
             sp = self.spectra[key]
-            sp.select_baselines(tau2=tau2, tau2_smooth=tau2_smooth, func=func, func2=func2, func2_e=func2_e, xrange=xrange, d=d)
+            sp.select_baselines(tau2=tau2, tau1=tau1, tau2_smooth=tau2_smooth, func=func, func2=func2, func2_e=func2_e, xrange=xrange, d=d)
+    #
+    def subtract_baselines(self, func=None, func2=None, func2_e=None, d=2, tau2=1.0e3, tau1=0, verbose=True, n_jobs=1):
+        for sp in self.spectra.values():
+            sp.subtract_baselines(func=func, func2=func2, func2_e=func2_e, d=d, tau2=tau2, tau1=tau1, verbose=verbose, n_jobs=n_jobs)
+    #
+    def smooth_spectra(self, func=None, func2=None, func2_e=None, d=2, tau2=1.0e3, tau1=0, verbose=True, n_jobs=1):
+        for sp in self.spectra.values():
+            sp.smooth_spectra(func=func, func2=func2, func2_e=func2_e, d=d, tau2=tau2, tau1=tau1, verbose=verbose, n_jobs=n_jobs)
     #
     def subtract_selected_baselines(self):
         for sp in self.spectra.values():
+            print(sp.key)
             sp.subtract_selected_baselines()
     #
     def save(self, root, tag):
