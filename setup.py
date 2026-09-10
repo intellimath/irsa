@@ -10,7 +10,7 @@ from setuptools.extension import Extension
 
 setup(
     name = 'irsa',
-    version = '0.1',
+    version = '0.2',
     description = 'Intelligent Raman Spectra Analysis',
     author = 'Zaur Shibzukhov',
     author_email = "szport@gmail.com",
@@ -36,16 +36,13 @@ setup(
         'Intended Audience :: Information Technology',
         'Programming Language :: Cython',
         'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.4',
-        'Programming Language :: Python :: 3.5',
-        'Programming Language :: Python :: 3.6',
-        'Programming Language :: Python :: 3.7',
         'Programming Language :: Python :: 3.8',
         'Programming Language :: Python :: 3.9',
         'Programming Language :: Python :: 3.10',
         'Programming Language :: Python :: 3.11',
         'Programming Language :: Python :: 3.12',
         'Programming Language :: Python :: 3.13',
+        'Programming Language :: Python :: 3.14',
         'Operating System :: OS Independent',
         'Topic :: Software Development :: Libraries :: Python Modules'
     ],

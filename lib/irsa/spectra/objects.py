@@ -425,7 +425,7 @@ def hausdorff_dimension(points, num_scales=25, min_scale=None, max_scale=None):
 
 def multiplicative_scatter_correction(spectra, reference=None):
     """
-    MSC using pure NumPy matrix operations (vectorized, no loops).
+    Multiplicative scatter correction using pure NumPy matrix operations.
     
     Parameters:
     -----------
@@ -451,7 +451,7 @@ def multiplicative_scatter_correction(spectra, reference=None):
     
     # Compute reference if not provided
     if reference is None:
-        reference = np.mean(spectra, axis=0)
+        reference = spectra.mean(axis=0)
     else:
         reference = np.asarray(reference, dtype=np.float64)
     
@@ -460,22 +460,22 @@ def multiplicative_scatter_correction(spectra, reference=None):
     ref_centered = reference - ref_mean
     
     # Center all spectra
-    spec_means = np.mean(spectra, axis=1, keepdims=True)  # Shape: (n_samples, 1)
+    spec_means = spectra.mean(axis=1)[:,None]  # Shape: (n_samples, 1)
     spectra_centered = spectra - spec_means
     
     # Calculate regression coefficients using matrix operations
     # m_i = Σ[(x_i - x̄_i) * (x_ref - x̄_ref)] / Σ[(x_ref - x̄_ref)²]
     
-    numerator = np.dot(spectra_centered, ref_centered)  # Shape: (n_samples,)
-    denominator = np.dot(ref_centered, ref_centered)    # Scalar
+    numerator = spectra_centered @ ref_centered  # Shape: (n_samples,)
+    denominator = ref_centered @ ref_centered    # Scalar
     
     m_factors = numerator / denominator
     
     # a_i = x̄_i - m_i * x̄_ref
-    a_factors = spec_means.ravel() - m_factors * ref_mean
+    a_factors = spec_means[:,0] - m_factors * ref_mean
     
     # Apply correction: (x_i - a_i) / m_i
-    corrected_spectra = (spectra - a_factors[:, np.newaxis]) / m_factors[:, np.newaxis]
+    corrected_spectra = (spectra - a_factors[:, None]) / m_factors[:, None]
     
     return corrected_spectra #, m_factors, a_factors, reference
 
@@ -665,6 +665,18 @@ class SpectraSeries:
             sp = self[i_series]
             sp.plot_spectra(smoothing=smoothing, kind=kind, #display_data=display_data, 
                             marker=marker, ms=ms, lw=lw, **kwds)
+    #
+    def plot_msc(self):
+        import matplotlib.pyplot as plt
+        import ipywidgets
+
+        i_series_slider = ipywidgets.IntSlider(min=0, max=len(self.y)-1)
+        i_series_slider.layout.width="50%"
+
+        @ipywidgets.interact(i_series=i_series_slider, continuous_update=False)
+        def _plot_msc(i_series):
+            sp = self[i_series]
+            sp.plot_msc()
     #
     def plot_pca_spectra(self, n_component=None):
         import matplotlib.pyplot as plt
@@ -1255,19 +1267,21 @@ class SpectraSeries:
         return dd
     #
     def filter(self, kind="m-zscore", **kwds):
-        Ys = []
-        for yk in self.y:
-            if kind == "m-zscore":
-                tau = kwds.get("tau", 3.5)
-                mu = inventory.robust_mean_2d_t(yk, tau=tau)
-                dd = abs(yk - mu)
-                z = inventory.modified_zscore(dd.sum(axis=1))
-                mask = (abs(z) < tau)
-                yk2 = np.array([y for m, y in zip(mask, yk) if m])
-            else:
-                yk2 = yk
-            Ys.append(yk2)
-        self.y = Ys
+        N = len(self.y)
+        for k in range(N):
+            sp = self[k]
+            sp.filter(kind=kind, **kwds)
+        #     if kind == "m-zscore":
+        #         tau = kwds.get("tau", 3.5)
+        #         mu = inventory.robust_mean_2d_t(yk, tau=tau)
+        #         dd = abs(yk - mu)
+        #         z = inventory.modified_zscore(dd.sum(axis=1))
+        #         mask = (abs(z) < tau)
+        #         yk2 = np.array([y for m, y in zip(mask, yk) if m])
+        #     else:
+        #         yk2 = yk
+        #     Ys.append(yk2)
+        # self.y = Ys
     #
     def flatten(self):
         # Ys = tuple(self.y)
@@ -1565,7 +1579,7 @@ class Spectra:
                 plt.fill_between(xs[i0:i1], 0, np.max(self.y[:,i0:i1], axis=0), color='LightBlue')
     #
     def multiplicative_scatter_correction(self):
-        self.y = multiplicative_scatter_correction(self.y)
+        self.y[:,:] = multiplicative_scatter_correction(self.y)
     #
     def scale_by_mean(self, scale=1.0, power=1.0):
         N = len(self.y)
@@ -1949,6 +1963,32 @@ class Spectra:
             plt.plot(xs, self.y[i] - pv, color="b", linewidth=1.5)
             
 
+            plt.grid(ls=':', lw=0.5)
+            plt.minorticks_on()
+            plt.tight_layout()
+            plt.show()            
+    #
+    def plot_msc(self):
+        import matplotlib.pyplot as plt
+        import ipywidgets
+
+        i_slider = ipywidgets.IntSlider(min=0, max=len(self.y)-1)
+        i_slider.layout.width="50%"
+
+        y_mean = inventory.robust_mean_2d_t(self.y)
+
+        @ipywidgets.interact(i=i_slider, continuous_update=False)
+        def _plot_msc(i=i_slider):
+            plt.figure(figsize=(13,4))
+            plt.title(f"MSC {self.key} ({len(self.y)} spectra)")
+
+            for ys in self.y:
+                plt.scatter(y_mean, ys, s=4, alpha=0.25)
+
+            y_i = self.y[i]
+            y_mean_s, y_i_s = list(zip(*sorted(zip(y_mean, y_i))))
+            plt.plot(y_mean_s, y_i_s, color="k", lw=1.5)
+            plt.plot(y_mean_s, y_mean_s, color="b", lw=1.5, ls='--')
             plt.grid(ls=':', lw=0.5)
             plt.minorticks_on()
             plt.tight_layout()
@@ -3429,6 +3469,12 @@ class SpectraCollection:
         def _plot_hist(key):
             sp = self.spectra[key]
             sp.plot_hist(bins=bins)
+    #
+    def plot_msc(self):
+        @ipywidgets.interact(key=self.select_key(), continuous_update=False)
+        def _plot_msc(key):
+            sp = self.spectra[key]
+            sp.plot_msc()
     #
     def plot_laser_tail(self, offset):
         @ipywidgets.interact(key=self.select_key(), continuous_update=False)
