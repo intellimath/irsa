@@ -1124,20 +1124,25 @@ class SpectraSeries:
             for y in ys:
                 y[:] = (y / y.max()) * scale
     #
-    def scale_by_mean(self, scale=1.0, power=1.0):
-        Ys = self.y
-        if power == 1.0:
-            for k in range(len(Ys)):
-                ys = Ys[k]
-                for y in ys:
-                    mu = abs(y).mean()
-                    y[:] = (y / mu) * scale
-        else:
-            for k in range(len(Ys)):
-                ys = Ys[k]
-                for y in ys:
-                    mu = ((abs(y) ** power).mean()) ** (1/power)
-                    y[:] = (y / mu) * scale
+    def scale_by_mean(self, power=1.0, scale=1.0):
+        for k in range(len(self.y)):
+            sp = self[k]
+            sp.scale_by_mean(power=1.0, scale=scale)
+    #
+    def scale_by_total_mean(self, scale=1.0):
+        for k in range(len(self.y)):
+            sp = self[k]
+            sp.scale_by_total_mean(scale=scale)
+    #
+    def scale_by_median(self, scale=1.0):
+        for k in range(len(self.y)):
+            sp = self[k]
+            sp.scale_by_median(scale=scale)
+    #
+    def scale_by_total_median(self, scale=1.0):
+        for k in range(len(self.y)):
+            sp = self[k]
+            sp.scale_by_total_median(scale=scale)
     #
     def scale_by_norm(self, scale=1.0):
         Ys = self.y
@@ -1398,9 +1403,9 @@ class Spectra:
     def filter(self, kind="m-zscore", **kwds):
         if kind == "m-zscore":
             tau = kwds.get("tau", 3.5)
-            mu = inventory.robust_mean_2d_t(self.y, tau=tau)
-            dd = abs(self.y - mu)
-            z = inventory.modified_zscore(dd.sum(axis=1))
+            mu = inventory.median_2d_t(self.y)
+            dd = abs(self.y - mu).sum(axis=1)
+            z = inventory.modified_zscore(dd)
             mask = (abs(z) < tau)
             self.y = np.array([y for m, y in zip(mask, self.y) if m])
     #
@@ -1581,7 +1586,7 @@ class Spectra:
     def multiplicative_scatter_correction(self):
         self.y[:,:] = multiplicative_scatter_correction(self.y)
     #
-    def scale_by_mean(self, scale=1.0, power=1.0):
+    def scale_by_mean(self, power=1.0, scale=1.0):
         N = len(self.y)
         if power == 1.0:
             for k in range(N):
@@ -1593,6 +1598,14 @@ class Spectra:
                 ys = self.y[k]
                 mu = ((abs(ys) ** power).mean()) ** (1/power)
                 ys[:] = (ys / mu) * scale
+    #
+    def scale_by_total_mean(self, scale=1.0):
+        mu = abs(self.y).mean()
+        self.y[:,:] = self.y / mu        
+    #
+    def scale_by_total_median(self, scale=1.0):
+        mu = np.median(abs(self.y))
+        self.y[:,:] = self.y / mu        
     #
     def scale_by_robust_zscore(self, tau=3.5, scale=1.0):
         N = len(self.y)
@@ -3339,9 +3352,17 @@ class SpectraCollection:
         for sp in self.spectra.values():
             sp.scale_by_robust_mean(tau=tau, scale=scale)
     #
-    def scale_by_mean(self, scale=1.0, power=1.0):
+    def scale_by_mean(self, power=1.0, scale=1.0):
         for sp in self.spectra.values():
-            sp.scale_by_mean(scale=scale, power=power)
+            sp.scale_by_mean(power=1.0, scale=scale)
+    #
+    def scale_by_total_mean(self, scale=1.0):
+        for sp in self.spectra.values():
+            sp.scale_by_total_mean(scale=scale)
+    #
+    def scale_by_total_median(self, scale=1.0):
+        for sp in self.spectra.values():
+            sp.scale_by_total_median(scale=scale)
     #
     def scale_by_max(self, scale=1.0):
         for sp in self.spectra.values():

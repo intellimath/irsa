@@ -92,7 +92,11 @@ def write_spectra_attrs(dirname, attrs):
     fd.close()
 
 def load_txt_spectra(path, delimiter="\t", skiprows=0):
-    xy = np.loadtxt(path, delimiter=delimiter, skiprows=skiprows)
+    try:
+        xy = np.loadtxt(path, delimiter=delimiter, skiprows=skiprows)
+    except:
+        print(path)
+        raise
 
     x = xy[:,0]
     ys = xy[:,1:]
@@ -166,6 +170,8 @@ def load_spectra(root, options, clear=True, skiprows=0, verbose=False):
     dd = {}
     list_path = list(iter_dir_with_spectra(root))
     for dirpath in list_path:
+        if verbose:
+            print(dirpath)
         spectra = load_experiment_spectra(dirpath, options, skiprows=skiprows, verbose=verbose)
         if spectra is None:
             continue
@@ -195,8 +201,8 @@ def load_experiment_spectra(dirpath, options=None, skiprows=0, verbose=False):
         return None
 
     Xs, Ys = load_txt_dir(dirpath, skiprows=skiprows)
-    if verbose:
-        print("ok:", dirpath)
+    # if verbose:
+    #     print("\t\t\tok")
     # print(os.path.split(dirpath)[-1], Xs[0].shape, Ys[0].shape, {k:v for k,v in attrs.items() if k in options})
 
     mesure_type = attrs["тип_измерения_спектров"]
