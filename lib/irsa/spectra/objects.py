@@ -608,7 +608,7 @@ class SpectraSeries:
         self.exclude_selected()
     #
     def select_baselines(self, tau2=1.0e5, tau1=0, tau2_smooth=0, func=None, func2=None, func2_e=None, 
-                         beta=100, func2_mode="e", xrange=None, d=2):
+                         beta=100, func2_mode="e", xrange=None, use_sigma=False, d=2):
         import matplotlib.pyplot as plt
         import ipywidgets
 
@@ -626,7 +626,7 @@ class SpectraSeries:
 
             spcol.select_baselines(tau2=tau2, tau1=tau1, tau2_smooth=tau2_smooth,
                                    func=func, func2=func2, func2_e=func2_e, beta=beta,
-                                   func_mode='e', xrange=xrange, d=d)
+                                   func_mode='e', xrange=xrange, use_sigma=use_sigma, d=d)
     #
     def replace_spectra_with_corrected(self):
         for i in range(len(self.y)):
@@ -2009,7 +2009,7 @@ class Spectra:
     #
     def select_baselines(self, tau2=1000.0, tau1=0.0, tau2_smooth=0.0, override_tau2=True,
                          bs_scale=3.0, alpha=0.001, eps=0.001, beta=1.0e2,
-                         func=None, func2=None, func2_e=None, xrange=None,
+                         func=None, func2=None, func2_e=None, xrange=None, use_sigma=False,
                          d=2, **kwargs):
 
         N = len(self.y)
@@ -2137,6 +2137,7 @@ class Spectra:
                 func2_e=func2_e,
                 tau2=tau2,
                 tau1=tau1,
+                use_sigma=use_sigma,
                 d=d)
 
             bs *= scale
@@ -3511,11 +3512,12 @@ class SpectraCollection:
     #
     def select_baselines(self, tau2=1000.0, tau1=0, tau2_smooth=0, xrange=None,
                          func=funcs.Expit(-10.0), func2=None, func2_e=None,
-                         d=2):
+                         use_sigma=False, d=2):
         @ipywidgets.interact(key=self.select_key(), continuous_update=False)
         def _select_baselines(key):
             sp = self.spectra[key]
-            sp.select_baselines(tau2=tau2, tau1=tau1, tau2_smooth=tau2_smooth, func=func, func2=func2, func2_e=func2_e, xrange=xrange, d=d)
+            sp.select_baselines(tau2=tau2, tau1=tau1, tau2_smooth=tau2_smooth, func=func, func2=func2, func2_e=func2_e, 
+                                xrange=xrange, use_sigma=use_sigma, d=d)
     #
     def subtract_baselines(self, func=None, func2=None, func2_e=None, d=2, tau2=1.0e3, tau1=0, verbose=True, n_jobs=1):
         for sp in self.spectra.values():
