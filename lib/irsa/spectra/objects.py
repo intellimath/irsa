@@ -476,6 +476,8 @@ def multiplicative_scatter_correction(spectra, reference=None):
     
     # Apply correction: (x_i - a_i) / m_i
     corrected_spectra = (spectra - a_factors[:, None]) / m_factors[:, None]
+
+    corrected_spectra = np.array([y for y in corrected_spectra if not np.any(np.isnan(y)) and not np.any(np.isinf(y))])
     
     return corrected_spectra #, m_factors, a_factors, reference
 
@@ -1061,7 +1063,7 @@ class SpectraSeries:
     def drop_notfinite(self):
         Ys = self.y
         for k in range(len(Ys)):
-            Ys[k] = np.array([y for y in Ys[k] if np.all(np.isfinite(y))])
+            Ys[k] = np.array([y for y in Ys[k] if np.all(np.isfinite(y)) and not np.any(np.isnan(y)) and not np.any(np.isinf(y))])
     #
     def scale_pca(self):
         from np.linalg import det
@@ -1584,7 +1586,7 @@ class Spectra:
                 plt.fill_between(xs[i0:i1], 0, np.max(self.y[:,i0:i1], axis=0), color='LightBlue')
     #
     def multiplicative_scatter_correction(self):
-        self.y[:,:] = multiplicative_scatter_correction(self.y)
+        self.y = multiplicative_scatter_correction(self.y)
     #
     def scale_by_mean(self, power=1.0, scale=1.0):
         N = len(self.y)
@@ -2664,7 +2666,7 @@ class Spectra:
             plt.show()
     #
     def plot_spectra(self, smoothing=False, kind="wh", #display_data=False,
-                     marker='s', ms=0, lw=0.5, **kwds):
+                     marker='s', ms=0, lw=0.5, plot_mean=True, **kwds):
         # from sklearn.decomposition import PCA, TruncatedSVD
 
         tau_slider = ipywidgets.FloatSlider(value=3.5, min=1.0, max=3.5, step=0.1, readout_format=".3f")
@@ -2750,10 +2752,8 @@ class Spectra:
             else:
                 plt.plot(xs, ys_i, linewidth=1.0, color='DarkBlue', label="current")
                 # plt.hlines(ys_i[abs(inventory.zscore(ys_i)) <= 2].mean(), xs.min(), xs.max(), linewidth=1.0, color='DarkBlue', label="current")
-                plt.plot(xs, inventory.robust_mean_2d_t(self.y), linewidth=1.0, color='k', label="mean")
-            # if display_data:
-            #     for xi,yi in zip(self.y[i], self.x):
-            #         print(f"{xi:.2f} {yi:.2f}")
+                if plot_mean:
+                    plt.plot(xs, inventory.robust_mean_2d_t(self.y), linewidth=1.0, color='k', label="mean")
 
             out_mask = None
             if smoothing:
@@ -3133,14 +3133,17 @@ class SpectraCollection:
         ys_list = []
         xs = None
         for sp in self.filter_by_attrs(**kwds):
+            # print(sp.y.shape, sp.key)
             ys_list.append(sp.y)
             if xs is None:
                 xs = sp.x
-            elif not np.all(xs == sp.x):
-                raise TypeError("Different xs in spectra collection")
+            # elif not np.all(xs == sp.x):
+            #     raise TypeError("Different xs in spectra collection")
         ys = np.vstack(ys_list)
 
         attrs = {name:val for name,val in kwds.items()}
+        if type(xs) is list:
+            xs = xs[0]
         sp = Spectra(xs, ys, attrs)
         if key is None:
             sp.attrs["key"] = "_".join(kwds.values())
@@ -3415,12 +3418,12 @@ class SpectraCollection:
             self.spectra[key] = sp.robust_averaging(tau=tau)
     #
     def plot_spectra(self, smoothing=False, kind="wh", #display_data=False,
-                     marker='s', ms=0, lw=0.25, **kwds):
+                     marker='s', ms=0, lw=0.25, plot_mean=True, **kwds):
         @ipywidgets.interact(key=self.select_key(), continuous_update=False)
         def _plot_current_spectra(key):
             sp = self.spectra[key]
             sp.plot_spectra(smoothing=smoothing, kind=kind, #display_data=display_data,
-                            marker=marker, ms=ms, lw=lw, **kwds)
+                            marker=marker, ms=ms, lw=lw, plot_mean=plot_mean, **kwds)
     #
     def plot_mu_sigma(self, alpha=2.0):
         @ipywidgets.interact(key=self.select_key(), continuous_update=False)

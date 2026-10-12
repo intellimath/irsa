@@ -9,12 +9,16 @@ _default_keys = [
     'вид_бактерий', 'штамм_бактерий',
     'резистентность',
     'номер_цикла', 'номер_эксперимента_в_цикле',
-    'номер_повтора', 'капля',
+    'номер_повтора', 
+    'номер_биологического_повтора',
+    'номер_технического_повтора',
+    'капля',
     'лизис',
     'дата',
     'отсечки_по_молекулярной_массе',
     'тип_измерения_спектров', "место",
-    'начальная_концентрация_клеток_в_пробе', 'номер_подложки',
+    'начальная_концентрация_клеток_в_пробе', 
+    'номер_подложки',
     'вода', 'отмывка_фильтров',
     "комментарий"]
 
@@ -110,7 +114,7 @@ def load_txt_spectra(path, delimiter="\t", skiprows=0):
 
     return x, ys
 
-def load_txt_dir(path, delimiter="\t", skiprows=0):
+def load_txt_dir(path, delimiter="\t", skiprows=0, minlen=1):
     """
     """
     import os
@@ -123,6 +127,9 @@ def load_txt_dir(path, delimiter="\t", skiprows=0):
     for fname in fnames:
 
         x, ys = load_txt_spectra(f"{path}/{fname}", delimiter=delimiter, skiprows=skiprows)
+
+        if len(ys) <= minlen:
+            continue
 
         # xy = np.loadtxt(f"{path}/{fname}", delimiter=delimiter)
 
@@ -166,7 +173,7 @@ def correct_attrs_with_places(root):
         print(f"remove attrs from {dirpath}")
         os.remove(f"{dirpath}/attrs.txt")
 
-def load_spectra(root, options, clear=True, skiprows=0, verbose=False):
+def load_spectra(root, options, keys=_default_keys, clear=True, skiprows=0, verbose=False):
     dd = {}
     list_path = list(iter_dir_with_spectra(root))
     for dirpath in list_path:
@@ -178,9 +185,9 @@ def load_spectra(root, options, clear=True, skiprows=0, verbose=False):
 
         # print(dirpath)
         attrs = spectra.attrs
-        attr_names = _default_keys
+        # attr_names = _default_keys
         key = "_".join(
-            attrs[k] for k in attr_names if k in attrs)
+            attrs[k] for k in keys if k in attrs)
         dd[key] = spectra
         spectra.attrs["key"] = key
         spectra.attrs["source"] = dirpath
@@ -193,8 +200,8 @@ def load_experiment_spectra(dirpath, options=None, skiprows=0, verbose=False):
     is_ok = True
     if options:
         for key, vals in options.items():
-            key_val = attrs.get(key, None)
-            if key_val not in vals:
+            keyval = attrs.get(key, None)
+            if keyval not in vals:
                 is_ok = False
                 break
     if not is_ok:
@@ -215,6 +222,12 @@ def load_experiment_spectra(dirpath, options=None, skiprows=0, verbose=False):
             return Spectra(Xs, Ys, attrs)
     elif mesure_type == "SS":
             return SpectraSeries(Xs, Ys, attrs)
+    elif mesure_type == "LS":
+            sp_series = SpectraSeries(Xs, Ys, attrs)
+            return sp_series.flatten()
+    else:
+        raise TypeError(f"{mesure_type} {dirpath}")
+        
 
 def collect_attr_values(root):
     attrs = {}
